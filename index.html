@@ -400,6 +400,7 @@ function startTimer(isHost){
     currentTimer--;
     updateTimerDOM();
     if(currentTimer<=0){stopTimer();if(isHost)doTimerEnd();}
+    else if(isHost && currentTimer % 2 === 0) checkAllAnswered(); // check every 2 sec
   },1000);
 }
 function stopTimer(){if(timerInterval){clearInterval(timerInterval);timerInterval=null;}}
@@ -428,6 +429,56 @@ function updateTimerDOM(){
 async function doStart(){
   await db.ref("games/"+S.gameCode+"/state").update({status:"question",currentQ:0});
   await db.ref("games/"+S.gameCode+"/answers/0").remove();
+}
+
+// Admin: force skip to results (end timer early)
+async function doSkipQuestion(){
+  stopTimer();
+  await doTimerEnd();
+}
+
+// Admin: quit game entirely, back to dashboard
+async function doQuitGame(){
+  if(!confirm("Quitter la partie en cours ?")) return;
+  stopTimer();
+  stopListening();
+  // Set game to final so players see results
+  try{ await db.ref("games/"+S.gameCode+"/state").update({status:"final"}); }catch(e){}
+  doBackToDash();
+}
+
+// Admin: restart same quiz from question 1
+async function doRestartQuiz(){
+  if(!confirm("Recommencer le quiz depuis le début ?")) return;
+  stopTimer();
+  // Reset all player scores
+  const plSnap = await db.ref("games/"+S.gameCode+"/players").once("value");
+  const raw = plSnap.val()||{};
+  for(const k of Object.keys(raw)){
+    raw[k].score = 0;
+    raw[k].lastCorrect = false;
+    raw[k].lastPartial = false;
+  }
+  await db.ref("games/"+S.gameCode+"/players").set(raw);
+  await db.ref("games/"+S.gameCode+"/answers/0").remove();
+  await db.ref("games/"+S.gameCode+"/state").update({status:"question",currentQ:0});
+}
+
+// Check if all players answered (called from timer tick)
+async function checkAllAnswered(){
+  if(!S.gs || S.screen !== "host-q") return;
+  try{
+    const snap = await db.ref("games/"+S.gameCode+"/answers/"+S.gs.currentQ).once("value");
+    const ans = snap.val() ? Object.keys(snap.val()).length : 0;
+    const total = S.players.length;
+    // Update the answered counter in DOM
+    const counter = document.getElementById("ans-counter");
+    if(counter) counter.textContent = ans + "/" + total;
+    if(total > 0 && ans >= total){
+      // Everyone answered — auto skip
+      doSkipQuestion();
+    }
+  }catch(e){}
 }
 async function doTimerEnd(){
   const g=S.gs;if(!g)return;
@@ -842,14 +893,24 @@ function render(){
       <div class="row mb-12" style="max-width:620px;margin:0 auto">
         <span class="mono" style="color:var(--muted);font-size:13px">${S.gs.currentQ+1}/${S.gs.totalQ}</span>
         ${isM?'<span class="badge badge-amber">MULTI-RÉPONSES</span>':""}
-        <div></div>
+        <span class="mono" style="color:var(--muted);font-size:12px" id="ans-counter">0/${S.players.length}</span>
       </div>
       ${bigTimerHTML()}
       <div class="card card-lg center mb-20 mt-16" style="padding:24px 20px">
         <h2 style="font-size:1.3rem;line-height:1.5;font-weight:700">${esc(q.q)}</h2>
       </div>
       <div class="answers cols-2" style="max-width:620px;margin:0 auto">${answerGrid(q,false,false)}</div>
+      <div style="display:flex;gap:8px;margin-top:20px;max-width:400px;width:100%;justify-content:center;flex-wrap:wrap">
+        <button class="btn btn-outline btn-sm" id="btn-skip" style="flex:1">⏭ Passer</button>
+        <button class="btn btn-outline btn-sm" id="btn-restart" style="flex:1;border-color:rgba(245,158,11,.3);color:var(--amber)">🔄 Recommencer</button>
+        <button class="btn btn-outline btn-sm" id="btn-quit" style="flex:1;border-color:rgba(239,68,68,.3);color:var(--red)">🚪 Quitter</button>
+      </div>
     </div>`;
+    document.getElementById("btn-skip").onclick=doSkipQuestion;
+    document.getElementById("btn-restart").onclick=doRestartQuiz;
+    document.getElementById("btn-quit").onclick=doQuitGame;
+    // Initial check
+    checkAllAnswered();
     return;
   }
 
@@ -863,8 +924,14 @@ function render(){
       <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:24px">${cHTML}</div>
       <div class="board">${boardHTML()}</div>
       <button class="btn btn-purple mt-20" id="btn-next" style="max-width:340px">${S.gs.currentQ+1>=S.gs.totalQ?"🏆 Résultats finaux":"➡️ Suivante"}</button>
+      <div style="display:flex;gap:8px;margin-top:12px;max-width:340px;width:100%;justify-content:center">
+        <button class="btn btn-outline btn-sm" id="btn-restart2" style="flex:1;border-color:rgba(245,158,11,.3);color:var(--amber)">🔄 Recommencer</button>
+        <button class="btn btn-outline btn-sm" id="btn-quit2" style="flex:1;border-color:rgba(239,68,68,.3);color:var(--red)">🚪 Quitter</button>
+      </div>
     </div>`;
     document.getElementById("btn-next").onclick=doNext;
+    document.getElementById("btn-restart2").onclick=doRestartQuiz;
+    document.getElementById("btn-quit2").onclick=doQuitGame;
     return;
   }
 
@@ -880,13 +947,16 @@ function render(){
       <p style="color:#94a3b8;margin:6px 0">remporte la partie !</p>
       ${S.screen==="play-f"&&me?`<p style="color:#c084fc;font-weight:700;margin-bottom:20px">${medal} — ${me.score} pts</p>`:""}
       <div class="board mt-16">${boardHTML(S.playerName)}</div>
-      <div style="display:flex;gap:10px;margin-top:24px;max-width:380px;width:100%">
-        <button class="btn btn-outline" id="btn-detail" style="flex:1">📊 Détail</button>
-        <button class="btn btn-purple" id="btn-end" style="flex:1">${S.role==="host"?"📚 Mes quiz":"🔄 Rejouer"}</button>
+      <div style="display:flex;gap:10px;margin-top:24px;max-width:380px;width:100%;flex-wrap:wrap">
+        <button class="btn btn-outline" id="btn-detail" style="flex:1;min-width:120px">📊 Détail</button>
+        ${S.role==="host"?`<button class="btn btn-amber" id="btn-replay" style="flex:1;min-width:120px">🔄 Relancer</button>`:""}
+        <button class="btn btn-purple" id="btn-end" style="flex:1;min-width:120px">${S.role==="host"?"📚 Mes quiz":"🔄 Rejouer"}</button>
       </div>
     </div>`;
     document.getElementById("btn-detail").onclick=loadDetailedResults;
     document.getElementById("btn-end").onclick=S.role==="host"?doBackToDash:doReset;
+    const replay=document.getElementById("btn-replay");
+    if(replay) replay.onclick=doRestartQuiz;
     return;
   }
 
@@ -1003,9 +1073,10 @@ function render(){
       <div class="row mb-8" style="max-width:520px;margin:0 auto">
         <span class="mono" style="color:var(--muted);font-size:13px">${S.gs.currentQ+1}/${S.gs.totalQ}</span>
         ${isM?'<span class="badge badge-amber">MULTI</span>':""}
-        ${timerHTML()}
+        <div></div>
       </div>
-      <div class="card center mb-16" style="padding:18px 16px;max-width:520px">
+      ${bigTimerHTML()}
+      <div class="card center mb-16 mt-12" style="padding:18px 16px;max-width:520px">
         <h2 style="font-size:1.15rem;line-height:1.5;font-weight:700">${esc(q.q)}</h2>
       </div>
       <div class="answers cols-2" style="max-width:520px;margin:0 auto">${answerGrid(q,true,true)}</div>
