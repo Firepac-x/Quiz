@@ -193,7 +193,7 @@ const FIREBASE_CONFIG = {
 };
 // ==========================================================
 
-const TIMER_S = 20;
+const DEFAULT_TIMER = 20;
 const SHAPES = ["▲","◆","●","■","★","▼"];
 const COLORS = ["c0","c1","c2","c3","c4","c5"];
 const CHIP_COLORS = ["#e63946","#457b9d","#f4a261","#2a9d8f","#8b5cf6","#ec4899"];
@@ -219,7 +219,8 @@ const SAMPLE_QUESTIONS = [
 
 let db = null;
 let gameRef = null, playersRef = null;
-let timerInterval = null, currentTimer = TIMER_S;
+let timerInterval = null, currentTimer = 20, currentTimerTotal = 20;
+let lastPlayersJSON = "";
 
 let S = {
   screen:"home", error:"", msg:"",
@@ -312,7 +313,7 @@ async function openBankEditor(id){
   if(!bank) return;
   setState({
     screen:"admin-edit",
-    currentBank:{id,...bank},
+    currentBank:{id,...bank,timerSeconds:bank.timerSeconds||DEFAULT_TIMER},
     editQ:JSON.parse(JSON.stringify(bank.questions||[])),
     error:"", msg:""
   });
@@ -337,8 +338,9 @@ async function launchGame(bankId){
   if(!bank||!bank.questions?.length){ setState({error:"Ce quiz n'a pas de questions !"}); return; }
   const code = mkCode();
   const qs = bank.questions.filter(q=>q.q.trim()&&q.options.every(o=>o.trim()));
+  const timerSec = bank.timerSeconds || DEFAULT_TIMER;
   await db.ref("games/"+code).set({
-    state:{status:"lobby",currentQ:0,totalQ:qs.length,questions:qs,bankName:bank.name},
+    state:{status:"lobby",currentQ:0,totalQ:qs.length,questions:qs,bankName:bank.name,timerSeconds:timerSec},
     players:{}
   });
   setState({gameCode:code,role:"host",screen:"host-lobby",error:""});
@@ -358,14 +360,22 @@ function listenGame(code){
       else{setState({screen:"play-q",selectedAnswers:[],answered:false});startTimer(false);}
     }else if(g.status==="results"&&prev?.status!=="results"){
       stopTimer();setState({screen:S.role==="host"?"host-r":"play-w"});
-    }else if(g.status==="final"){
+    }else if(g.status==="final"&&prev?.status!=="final"){
       stopTimer();setState({screen:S.role==="host"?"host-f":"play-f"});
       if(S.role==="host")saveGameHistory();
-    }else{render();}
+    }
+    // Don't re-render during questions — timer handles its own updates
   });
   playersRef.on("value",snap=>{
     const p=snap.val();S.players=p?Object.values(p):[];
-    S.players.sort((a,b)=>b.score-a.score);render();
+    S.players.sort((a,b)=>b.score-a.score);
+    const json=JSON.stringify(S.players);
+    // Only re-render if players actually changed AND we're on a screen that shows them
+    if(json!==lastPlayersJSON){
+      lastPlayersJSON=json;
+      const scr=S.screen;
+      if(scr==="host-lobby"||scr==="host-r"||scr==="host-f"||scr==="play-f"||scr==="play-w") render();
+    }
   });
 }
 function stopListening(){
@@ -375,15 +385,44 @@ function stopListening(){
 }
 
 // ============ TIMER ============
+function getTimerDuration(){
+  // Use bank timer if set, else default 20s
+  if(S.gs && S.gs.timerSeconds) return S.gs.timerSeconds;
+  return 20;
+}
 function startTimer(isHost){
-  stopTimer();currentTimer=TIMER_S;render();
+  stopTimer();
+  const dur = getTimerDuration();
+  currentTimer = dur;
+  currentTimerTotal = dur;
+  render();
   timerInterval=setInterval(()=>{
     currentTimer--;
+    updateTimerDOM();
     if(currentTimer<=0){stopTimer();if(isHost)doTimerEnd();}
-    render();
   },1000);
 }
 function stopTimer(){if(timerInterval){clearInterval(timerInterval);timerInterval=null;}}
+function updateTimerDOM(){
+  // Update timer elements without full re-render
+  const bar = document.getElementById("timer-fill");
+  const num = document.getElementById("timer-num");
+  const circle = document.getElementById("timer-circle");
+  const circleNum = document.getElementById("timer-circle-num");
+  if(!bar && !circle) return;
+  const dur = currentTimerTotal || 20;
+  const pct = (currentTimer/dur)*100;
+  const c = currentTimer<=3?"var(--red)":currentTimer<=7?"var(--amber)":"var(--green)";
+  if(bar){bar.style.width=pct+"%";bar.style.background=c;}
+  if(num){num.style.color=c;num.textContent=currentTimer;}
+  if(circle){
+    const circ = 2*Math.PI*54;
+    const offset = circ * (1 - currentTimer/dur);
+    circle.style.strokeDashoffset = offset;
+    circle.style.stroke = currentTimer<=3?"#ef4444":currentTimer<=7?"#f59e0b":"#22c55e";
+  }
+  if(circleNum){circleNum.textContent=currentTimer;circleNum.style.fill=currentTimer<=3?"#ef4444":currentTimer<=7?"#f59e0b":"#22c55e";}
+}
 
 // ============ HOST GAME ACTIONS ============
 async function doStart(){
@@ -394,6 +433,7 @@ async function doTimerEnd(){
   const g=S.gs;if(!g)return;
   const snap=await db.ref("games/"+S.gameCode+"/answers/"+g.currentQ).once("value");
   const answers=Object.values(snap.val()||{});
+  const dur=g.timerSeconds||DEFAULT_TIMER;
   const cSet=new Set(g.questions[g.currentQ].answers);
   const isM=g.questions[g.currentQ].type==="multi";
   const plSnap=await db.ref("games/"+S.gameCode+"/players").once("value");
@@ -406,10 +446,10 @@ async function doTimerEnd(){
     if(isM){
       const allOk=[...cSet].every(c=>chosen.has(c));
       const noWrong=[...chosen].every(c=>cSet.has(c));
-      if(allOk&&noWrong){p.score=(p.score||0)+1000+Math.round((a.timeLeft/TIMER_S)*500);p.lastCorrect=true;}
+      if(allOk&&noWrong){p.score=(p.score||0)+1000+Math.round((a.timeLeft/dur)*500);p.lastCorrect=true;}
       else{const pt=Math.max(0,Math.round(([...chosen].filter(c=>cSet.has(c)).length/cSet.size)*500));p.score=(p.score||0)+pt;p.lastPartial=pt>0;}
     }else{
-      if(cSet.has(a.choices?.[0])){p.score=(p.score||0)+1000+Math.round((a.timeLeft/TIMER_S)*500);p.lastCorrect=true;}
+      if(cSet.has(a.choices?.[0])){p.score=(p.score||0)+1000+Math.round((a.timeLeft/dur)*500);p.lastCorrect=true;}
     }
   }
   await db.ref("games/"+S.gameCode+"/players").set(raw);
@@ -535,9 +575,23 @@ async function saveGameHistory(){
 
 // ============ RENDER HELPERS ============
 function timerHTML(){
-  const pct=(currentTimer/TIMER_S)*100;
+  const dur=currentTimerTotal||20;
+  const pct=(currentTimer/dur)*100;
   const c=currentTimer<=3?"var(--red)":currentTimer<=7?"var(--amber)":"var(--green)";
-  return `<div class="timer"><div class="timer-bar"><div class="timer-fill" style="width:${pct}%;background:${c}"></div></div><span class="mono" style="color:${c};font-weight:800;font-size:15px;min-width:22px;text-align:right">${currentTimer}</span></div>`;
+  return `<div class="timer"><div class="timer-bar"><div class="timer-fill" id="timer-fill" style="width:${pct}%;background:${c}"></div></div><span class="mono" id="timer-num" style="color:${c};font-weight:800;font-size:15px;min-width:22px;text-align:right">${currentTimer}</span></div>`;
+}
+function bigTimerHTML(){
+  const dur=currentTimerTotal||20;
+  const circ=2*Math.PI*54;
+  const offset=circ*(1-currentTimer/dur);
+  const c=currentTimer<=3?"#ef4444":currentTimer<=7?"#f59e0b":"#22c55e";
+  return `<svg width="120" height="120" viewBox="0 0 120 120" style="margin:0 auto;display:block">
+    <circle cx="60" cy="60" r="54" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="8"/>
+    <circle id="timer-circle" cx="60" cy="60" r="54" fill="none" stroke="${c}" stroke-width="8"
+      stroke-dasharray="${circ}" stroke-dashoffset="${offset}"
+      stroke-linecap="round" transform="rotate(-90 60 60)" style="transition:stroke-dashoffset 1s linear,stroke .5s"/>
+    <text id="timer-circle-num" x="60" y="68" text-anchor="middle" fill="${c}" font-size="32" font-weight="900" font-family="'JetBrains Mono',monospace">${currentTimer}</text>
+  </svg>`;
 }
 function boardHTML(hl){
   return S.players.slice(0,15).map((p,i)=>{
@@ -675,6 +729,8 @@ function render(){
       </div>`;
     }).join("");
 
+    const bankTimer = S.currentBank.timerSeconds || DEFAULT_TIMER;
+
     root.innerHTML=`
       <div class="sticky-head">
         <div class="row">
@@ -683,6 +739,22 @@ function render(){
           <span class="mono" style="color:var(--muted);font-size:13px">${S.editQ.length}q</span>
         </div>
         ${S.msg?`<p class="ok mt-4">${esc(S.msg)}</p>`:""}
+      </div>
+      <div class="card mb-16" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:1.2rem">⏱</span>
+          <span style="font-weight:700;font-size:14px">Timer par question</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <select id="sel-timer" style="background:var(--subtle);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;text-align:center">
+            <option value="10" ${bankTimer===10?"selected":""}>10s</option>
+            <option value="15" ${bankTimer===15?"selected":""}>15s</option>
+            <option value="20" ${bankTimer===20?"selected":""}>20s</option>
+            <option value="30" ${bankTimer===30?"selected":""}>30s</option>
+            <option value="45" ${bankTimer===45?"selected":""}>45s</option>
+            <option value="60" ${bankTimer===60?"selected":""}>60s</option>
+          </select>
+        </div>
       </div>
       ${qHTML}
       <div class="bottom-bar">
@@ -696,6 +768,11 @@ function render(){
     document.getElementById("btn-save").onclick=saveBankQuestions;
     document.getElementById("btn-playedit").onclick=async()=>{await saveBankQuestions();launchGame(S.currentBank.id);};
     document.getElementById("inp-bankname").onchange=e=>saveBankName(e.target.value);
+    document.getElementById("sel-timer").onchange=e=>{
+      const v=parseInt(e.target.value);
+      S.currentBank.timerSeconds=v;
+      db.ref("banks/"+S.currentBank.id+"/timerSeconds").set(v);
+    };
 
     root.querySelectorAll("[data-qinput]").forEach(el=>el.oninput=e=>eQ(+e.target.dataset.qinput,"q",e.target.value));
     root.querySelectorAll("[data-typesel]").forEach(el=>el.onchange=e=>eQ(+e.target.dataset.typesel,"type",e.target.value));
@@ -765,9 +842,10 @@ function render(){
       <div class="row mb-12" style="max-width:620px;margin:0 auto">
         <span class="mono" style="color:var(--muted);font-size:13px">${S.gs.currentQ+1}/${S.gs.totalQ}</span>
         ${isM?'<span class="badge badge-amber">MULTI-RÉPONSES</span>':""}
-        ${timerHTML()}
+        <div></div>
       </div>
-      <div class="card card-lg center mb-20" style="padding:24px 20px">
+      ${bigTimerHTML()}
+      <div class="card card-lg center mb-20 mt-16" style="padding:24px 20px">
         <h2 style="font-size:1.3rem;line-height:1.5;font-weight:700">${esc(q.q)}</h2>
       </div>
       <div class="answers cols-2" style="max-width:620px;margin:0 auto">${answerGrid(q,false,false)}</div>
