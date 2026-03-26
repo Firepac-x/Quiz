@@ -232,6 +232,8 @@ let S = {
   playerName:"", joinCode:"", selectedAnswers:[], answered:false,
   // Detail results
   detailData:null, detailTab:"questions",
+  // Import
+  importText:"",
 };
 
 function setState(p){ Object.assign(S,p); render(); }
@@ -552,6 +554,75 @@ function eQ(qi,f,v){
   render();
 }
 
+// ============ IMPORT PARSER ============
+function parseImportText(text){
+  const questions = [];
+  // Split by blank lines (double newline)
+  const blocks = text.split(/\n\s*\n/).map(b=>b.trim()).filter(b=>b);
+  for(const block of blocks){
+    const lines = block.split("\n").map(l=>l.trim()).filter(l=>l);
+    if(lines.length < 2) continue;
+    // First line = question
+    let qText = lines[0];
+    // Remove leading numbering like "1.", "1)", "Q:", "Q1:", etc.
+    qText = qText.replace(/^(Q\d*[\s:.\-)]*|\d+[\s:.\-)]+)/i, "").trim();
+    const options = [];
+    const answers = [];
+    for(let i=1; i<lines.length; i++){
+      let line = lines[i];
+      let isCorrect = false;
+      // Check for correct answer markers: *, ✓, (correct), [x], ✅
+      if(line.match(/^\s*\*/)){
+        isCorrect = true;
+        line = line.replace(/^\s*\*\s*/, "");
+      } else if(line.match(/^\s*✓/)){
+        isCorrect = true;
+        line = line.replace(/^\s*✓\s*/, "");
+      } else if(line.match(/^\s*✅/)){
+        isCorrect = true;
+        line = line.replace(/^\s*✅\s*/, "");
+      } else if(line.match(/\(correct\)\s*$/i)){
+        isCorrect = true;
+        line = line.replace(/\s*\(correct\)\s*$/i, "");
+      } else if(line.match(/^\s*\[x\]/i)){
+        isCorrect = true;
+        line = line.replace(/^\s*\[x\]\s*/i, "");
+      }
+      // Remove leading markers like "- ", "a) ", "A. ", etc.
+      line = line.replace(/^[\s]*[-•]\s*/, "");
+      line = line.replace(/^[a-fA-F]\s*[.)]\s*/, "");
+      line = line.trim();
+      if(!line) continue;
+      if(isCorrect) answers.push(options.length);
+      options.push(line);
+    }
+    if(options.length < 2) continue;
+    // Determine type
+    let type = "single";
+    const isVF = options.length === 2 && 
+      ((options[0].toLowerCase()==="vrai" && options[1].toLowerCase()==="faux") ||
+       (options[0].toLowerCase()==="true" && options[1].toLowerCase()==="false"));
+    if(isVF) type = "vf";
+    else if(answers.length > 1) type = "multi";
+    // If no answers marked, default first one
+    if(answers.length === 0) answers.push(0);
+    questions.push({ q: qText, type, options, answers });
+  }
+  return questions;
+}
+
+function doImport(){
+  const parsed = parseImportText(S.importText);
+  if(!parsed.length){
+    setState({error: "Aucune question détectée. Vérifie le format !"});
+    return;
+  }
+  // Add to existing questions (or replace if current is empty/sample)
+  S.editQ = [...S.editQ, ...parsed];
+  setState({screen:"admin-edit", importText:"", error:"", msg: `✓ ${parsed.length} question${parsed.length>1?"s":""} importée${parsed.length>1?"s":""}!`});
+  setTimeout(()=>setState({msg:""}), 3000);
+}
+
 function doReset(){
   stopListening();
   const defaultScreen = isAdmin() ? "admin-login" : "player-join";
@@ -809,13 +880,15 @@ function render(){
       </div>
       ${qHTML}
       <div class="bottom-bar">
-        <button class="btn btn-outline btn-sm" id="btn-addq" style="flex:1;max-width:140px">+ Question</button>
-        <button class="btn btn-purple btn-sm" id="btn-save" style="flex:1;max-width:160px">💾 Sauvegarder</button>
-        <button class="btn btn-teal btn-sm" id="btn-playedit" style="flex:1;max-width:140px">▶️ Jouer</button>
+        <button class="btn btn-outline btn-sm" id="btn-addq" style="flex:1;max-width:110px">+ Question</button>
+        <button class="btn btn-amber btn-sm" id="btn-import" style="flex:1;max-width:110px">📋 Importer</button>
+        <button class="btn btn-purple btn-sm" id="btn-save" style="flex:1;max-width:130px">💾 Sauver</button>
+        <button class="btn btn-teal btn-sm" id="btn-playedit" style="flex:1;max-width:110px">▶️ Jouer</button>
       </div>
     `;
     document.getElementById("btn-backdash").onclick=doBackToDash;
     document.getElementById("btn-addq").onclick=()=>{S.editQ.push({q:"",type:"vf",options:["Vrai","Faux"],answers:[0]});render();};
+    document.getElementById("btn-import").onclick=()=>setState({screen:"admin-import",importText:"",error:""});
     document.getElementById("btn-save").onclick=saveBankQuestions;
     document.getElementById("btn-playedit").onclick=async()=>{await saveBankQuestions();launchGame(S.currentBank.id);};
     document.getElementById("inp-bankname").onchange=e=>saveBankName(e.target.value);
@@ -832,6 +905,100 @@ function render(){
     root.querySelectorAll("[data-optqi]").forEach(el=>el.oninput=e=>eQ(+e.target.dataset.optqi,"opt"+e.target.dataset.optoi,e.target.value));
     root.querySelectorAll("[data-addopt]").forEach(el=>el.onclick=()=>{const qi=+el.dataset.addopt;if(S.editQ[qi].options.length<6){S.editQ[qi].options.push("");render();}});
     root.querySelectorAll("[data-delopt]").forEach(el=>{const[qi,oi]=el.dataset.delopt.split("-").map(Number);el.onclick=()=>{if(S.editQ[qi].options.length>2){S.editQ[qi].options.splice(oi,1);S.editQ[qi].answers=S.editQ[qi].answers.filter(a=>a!==oi).map(a=>a>oi?a-1:a);render();}}});
+    return;
+  }
+
+  // ADMIN IMPORT
+  if(S.screen==="admin-import"){
+    root.className="scroll-page";
+    const example = `Comment s'appelle le chef d'agrès ?
+*Le sergent
+Le caporal
+Le lieutenant
+Le capitaine
+
+La PEP permet d'éviter le collapsus ?
+*Vrai
+Faux
+
+Quels paramètres vérifier en VSAi ?
+*VT
+*FR
+Pplateau
+*Saturation O2`;
+
+    root.innerHTML=`
+      <div class="sticky-head row">
+        <button class="btn-ghost" id="btn-back-edit">← Retour</button>
+        <h2 class="title" style="font-size:1.2rem">📋 <span>Importer</span></h2>
+        <div></div>
+      </div>
+
+      <div class="card mb-16" style="padding:16px">
+        <p style="font-weight:700;font-size:14px;margin-bottom:8px">📖 Format à utiliser :</p>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.7">
+          <p style="margin-bottom:6px">Chaque bloc = une question. Ligne vide entre chaque question.</p>
+          <p style="margin-bottom:6px"><span style="color:var(--green);font-weight:700">*</span> devant une réponse = bonne réponse</p>
+          <p style="margin-bottom:6px">Plusieurs <span style="color:var(--green);font-weight:700">*</span> = multi-réponses</p>
+          <p>Vrai/Faux est détecté automatiquement</p>
+        </div>
+      </div>
+
+      <div class="card mb-12" style="padding:14px">
+        <p style="font-size:12px;color:var(--muted);margin-bottom:6px">💡 Prompt à donner à une IA :</p>
+        <div style="background:var(--subtle);border-radius:8px;padding:10px;font-size:12px;color:#94a3b8;line-height:1.6;font-family:'JetBrains Mono',monospace">
+          Génère 20 questions de quiz sur [TON SUJET].<br>
+          Format : une question par bloc, réponses en dessous,<br>
+          * devant les bonnes réponses.<br>
+          Ligne vide entre chaque question.<br>
+          Mélange vrai/faux et QCM.
+        </div>
+      </div>
+
+      <p style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--text)">Colle tes questions ici :</p>
+      <textarea id="inp-import" placeholder="${esc(example)}" style="min-height:300px;font-size:13px;line-height:1.6;font-family:'JetBrains Mono',monospace;white-space:pre-wrap">${esc(S.importText)}</textarea>
+
+      ${S.error?`<p class="err mt-8">${esc(S.error)}</p>`:""}
+
+      <div style="display:flex;gap:10px;margin-top:16px;padding-bottom:30px">
+        <button class="btn btn-outline" id="btn-preview" style="flex:1">👁 Aperçu</button>
+        <button class="btn btn-purple" id="btn-doimport" style="flex:1">✅ Importer</button>
+      </div>
+
+      <div id="preview-zone"></div>
+    `;
+
+    document.getElementById("btn-back-edit").onclick=()=>setState({screen:"admin-edit",error:""});
+    document.getElementById("inp-import").oninput=e=>S.importText=e.target.value;
+    document.getElementById("btn-doimport").onclick=()=>{
+      S.importText=document.getElementById("inp-import").value;
+      doImport();
+    };
+    document.getElementById("btn-preview").onclick=()=>{
+      S.importText=document.getElementById("inp-import").value;
+      const parsed = parseImportText(S.importText);
+      const zone = document.getElementById("preview-zone");
+      if(!parsed.length){
+        zone.innerHTML='<p class="err">Aucune question détectée</p>';
+        return;
+      }
+      zone.innerHTML='<p style="color:var(--green);font-weight:700;font-size:13px;margin-bottom:12px">✓ '+parsed.length+' question'+(parsed.length>1?'s':'')+' détectée'+(parsed.length>1?'s':'')+'</p>' +
+        parsed.map((q,i)=>{
+          const typeLabel = q.type==="vf"?"V/F":q.type==="multi"?"Multi":"Unique";
+          const typeBg = q.type==="vf"?"var(--teal)":q.type==="multi"?"var(--amber)":"var(--purple)";
+          return '<div class="card mb-8" style="padding:12px">'+
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'+
+              '<span class="mono" style="color:var(--amber);font-size:12px;font-weight:800">#'+(i+1)+'</span>'+
+              '<span style="background:'+typeBg+';color:#fff;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700">'+typeLabel+'</span>'+
+            '</div>'+
+            '<p style="font-weight:700;font-size:13px;margin-bottom:8px">'+esc(q.q)+'</p>'+
+            q.options.map((o,oi)=>'<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">'+
+              '<span style="color:'+(q.answers.includes(oi)?"var(--green)":"var(--red)")+';font-size:12px;font-weight:700">'+(q.answers.includes(oi)?"✓":"✗")+'</span>'+
+              '<span style="font-size:13px;color:'+(q.answers.includes(oi)?"var(--green)":"#94a3b8")+'">'+esc(o)+'</span>'+
+            '</div>').join("")+
+          '</div>';
+        }).join("");
+    };
     return;
   }
 
