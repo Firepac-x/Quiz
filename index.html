@@ -463,7 +463,8 @@ function eQ(qi,f,v){
 
 function doReset(){
   stopListening();
-  setState({screen:"home",gs:null,players:[],gameCode:"",error:"",answered:false,selectedAnswers:[],role:null,msg:"",detailData:null,detailTab:"questions"});
+  const defaultScreen = isAdmin() ? "admin-login" : "player-join";
+  setState({screen:defaultScreen,gs:null,players:[],gameCode:"",error:"",answered:false,selectedAnswers:[],role:null,msg:"",detailData:null,detailTab:"questions",adminPw:""});
 }
 function doBackToDash(){
   stopListening();
@@ -582,19 +583,10 @@ function render(){
     return;
   }
 
-  // HOME — Role select
+  // HOME — redirect based on role
   if(S.screen==="home"){
-    root.className="app";
-    root.innerHTML=`<div class="fade-in center">
-      <h1 class="title mb-4">QUIZ <span>BATTLE</span></h1>
-      <p style="color:var(--muted);font-size:.95rem;margin-bottom:36px">Quiz multijoueur en temps réel</p>
-      <div style="display:flex;gap:16px;margin-bottom:32px">
-        <div class="role-card" id="role-admin"><div class="icon">👨‍💼</div><div class="label">Admin</div><div class="desc">Gérer les quiz et lancer des parties</div></div>
-        <div class="role-card" id="role-player"><div class="icon">🎮</div><div class="label">Joueur</div><div class="desc">Rejoindre une partie avec un code</div></div>
-      </div>
-    </div>`;
-    document.getElementById("role-admin").onclick=()=>setState({screen:"admin-login",error:"",adminPw:""});
-    document.getElementById("role-player").onclick=()=>setState({screen:"player-join",error:""});
+    if(isAdmin()) setState({screen:"admin-login",error:"",adminPw:""});
+    else setState({screen:"player-join",error:""});
     return;
   }
 
@@ -610,12 +602,10 @@ function render(){
         <button class="btn btn-purple" id="btn-pw">Connexion</button>
         ${S.error?`<p class="err">${esc(S.error)}</p>`:""}
       </div>
-      <button class="btn-ghost mt-20" id="btn-back">← Retour</button>
     </div>`;
     document.getElementById("inp-pw").oninput=e=>S.adminPw=e.target.value;
     document.getElementById("inp-pw").onkeydown=e=>{if(e.key==="Enter")doAdminLogin();};
     document.getElementById("btn-pw").onclick=doAdminLogin;
-    document.getElementById("btn-back").onclick=doReset;
     return;
   }
 
@@ -717,25 +707,23 @@ function render(){
     return;
   }
 
-  // PLAYER JOIN
+  // PLAYER JOIN (landing page)
   if(S.screen==="player-join"){
     root.className="app";
     root.innerHTML=`<div class="fade-in center" style="width:100%;max-width:340px">
-      <div style="font-size:2.2rem;margin-bottom:8px">🎮</div>
-      <h2 class="title mb-24" style="font-size:1.5rem">Rejoindre</h2>
-      <div class="gap-10 w100">
+      <h1 class="title mb-4">QUIZ <span>BATTLE</span></h1>
+      <p style="color:var(--muted);font-size:.95rem;margin-bottom:32px">Rejoins la partie !</p>
+      <div class="card gap-10">
         <input id="inp-name" placeholder="Ton pseudo" value="${esc(S.playerName)}">
         <input id="inp-code" class="code-input" placeholder="CODE" maxlength="6" value="${esc(S.joinCode)}">
-        <button class="btn btn-teal" id="btn-join">🚀 Rejoindre la partie</button>
+        <button class="btn btn-teal" id="btn-join">🚀 Rejoindre</button>
         ${S.error?`<p class="err">${esc(S.error)}</p>`:""}
       </div>
-      <button class="btn-ghost mt-20" id="btn-back">← Retour</button>
     </div>`;
     document.getElementById("inp-name").oninput=e=>S.playerName=e.target.value;
     document.getElementById("inp-code").oninput=e=>S.joinCode=e.target.value.toUpperCase();
     document.getElementById("inp-code").onkeydown=e=>{if(e.key==="Enter")doJoin();};
     document.getElementById("btn-join").onclick=doJoin;
-    document.getElementById("btn-back").onclick=doReset;
     return;
   }
 
@@ -744,19 +732,28 @@ function render(){
     root.className="app";
     const chips=S.players.map((p,i)=>`<div class="chip" style="background:${CHIP_COLORS[i%CHIP_COLORS.length]}22;border:2px solid ${CHIP_COLORS[i%CHIP_COLORS.length]}66">${esc(p.name)}</div>`).join("");
     const bankName=S.gs?.bankName||"";
+    const qrUrl=getQRUrl(S.gameCode);
+    const joinUrl=getBaseURL()+"#"+S.gameCode;
     root.innerHTML=`<div class="fade-in center">
       ${bankName?`<span class="badge badge-purple mb-12">${esc(bankName)}</span>`:""}
       <p style="color:var(--muted);font-size:13px;margin-bottom:4px">CODE DE PARTIE</p>
-      <div class="big-code mb-24">${S.gameCode}</div>
-      <div class="card center" style="padding:20px;max-width:380px">
-        <p style="color:#94a3b8;margin-bottom:14px;font-size:14px">Joueurs connectés</p>
+      <div class="big-code mb-16">${S.gameCode}</div>
+      <div class="card center mb-16" style="padding:20px;max-width:380px">
+        <p style="color:#94a3b8;margin-bottom:12px;font-size:13px">Scannez pour rejoindre</p>
+        <img src="${qrUrl}" alt="QR Code" style="width:200px;height:200px;border-radius:12px;margin:0 auto;display:block;background:#111631"/>
+        <p style="color:var(--muted);font-size:11px;margin-top:10px;word-break:break-all">${esc(joinUrl)}</p>
+        <button class="btn btn-outline btn-sm mt-8" id="btn-dlqr" style="margin:0 auto;width:auto">📥 Télécharger le QR</button>
+      </div>
+      <div class="card center" style="padding:16px;max-width:380px">
+        <p style="color:#94a3b8;margin-bottom:10px;font-size:14px">Joueurs connectés</p>
         <div class="chips">${chips||'<p style="color:var(--muted);font-size:13px">En attente...</p>'}</div>
       </div>
-      <button class="btn btn-purple mt-24" id="btn-start" ${!S.players.length?"disabled":""} style="max-width:340px">▶️ Démarrer (${S.players.length} joueur${S.players.length!==1?"s":""})</button>
-      <button class="btn-ghost mt-16" id="btn-cancel">Annuler</button>
+      <button class="btn btn-purple mt-20" id="btn-start" ${!S.players.length?"disabled":""} style="max-width:340px">▶️ Démarrer (${S.players.length} joueur${S.players.length!==1?"s":""})</button>
+      <button class="btn-ghost mt-12" id="btn-cancel">Annuler</button>
     </div>`;
     document.getElementById("btn-start").onclick=doStart;
     document.getElementById("btn-cancel").onclick=doBackToDash;
+    document.getElementById("btn-dlqr").onclick=downloadQR;
     return;
   }
 
@@ -962,8 +959,31 @@ function render(){
 }
 
 // ============ BOOT ============
+function isAdmin(){ return window.location.search.includes("admin"); }
+function getBaseURL(){ return window.location.origin + window.location.pathname; }
+function getQRUrl(code){
+  const joinUrl = getBaseURL() + "#" + code;
+  return "https://api.qrserver.com/v1/create-qr-code/?size=280x280&color=e2e8f0&bgcolor=111631&data=" + encodeURIComponent(joinUrl);
+}
+function downloadQR(){
+  const code = S.gameCode;
+  const url = getQRUrl(code);
+  const a = document.createElement("a");
+  a.href = url; a.download = "quiz-" + code + ".png"; a.target = "_blank";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+
 window.addEventListener("DOMContentLoaded",()=>{
-  if(initFirebase()) setState({screen:"home"});
+  if(!initFirebase()) return;
+  // Check if player arrived via QR code with hash code
+  const hash = window.location.hash.replace("#","").trim();
+  if(hash && hash.length === 6 && !isAdmin()){
+    setState({screen:"player-join", joinCode: hash.toUpperCase(), error:""});
+  } else if(isAdmin()){
+    setState({screen:"admin-login", error:"", adminPw:""});
+  } else {
+    setState({screen:"player-join", error:""});
+  }
 });
 </script>
 </body>
