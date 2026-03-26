@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Quiz Battle</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg1:#0b0e1a;--bg2:#111631;--bg3:#161b3a;
+  --purple:#7c5cfc;--purple2:#5b3fd4;--purple-soft:rgba(124,92,252,.12);
+  --teal:#14b8a6;--teal2:#0d9488;
+  --amber:#f59e0b;--amber2:#d97706;
+  --red:#ef4444;--green:#22c55e;
+  --text:#e2e8f0;--muted:#64748b;--subtle:rgba(255,255,255,0.06);
+  --card:rgba(255,255,255,0.04);--border:rgba(255,255,255,0.08);
+}
+html,body{height:100%;font-family:'Nunito',sans-serif;background:var(--bg1);color:var(--text);overflow-x:hidden}
+body{background:linear-gradient(160deg,var(--bg1) 0%,var(--bg2) 50%,var(--bg3) 100%)}
+
+/* Layout */
+.app{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}
+.scroll-page{min-height:100vh;padding:20px 14px;padding-bottom:100px;max-width:620px;margin:0 auto;width:100%}
+
+/* Typography */
+.title{font-family:'JetBrains Mono',monospace;font-weight:700;letter-spacing:-1px;font-size:2.2rem}
+.title span{color:var(--amber)}
+.mono{font-family:'JetBrains Mono',monospace}
+h3{font-size:1.1rem;font-weight:700;margin-bottom:12px}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;width:100%}
+.card-lg{max-width:620px}
+.card-hover{transition:border-color .2s;cursor:pointer}
+.card-hover:hover{border-color:rgba(124,92,252,.3)}
+
+/* Inputs */
+input,select,textarea{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--subtle);color:var(--text);font-size:15px;font-family:'Nunito',sans-serif;outline:none;transition:border .2s}
+input:focus,textarea:focus{border-color:var(--purple)}
+input::placeholder,textarea::placeholder{color:var(--muted)}
+textarea{resize:vertical;min-height:60px}
+.code-input{letter-spacing:10px;text-align:center;font-weight:900;font-size:1.4rem;font-family:'JetBrains Mono',monospace;text-transform:uppercase}
+.pw-input{letter-spacing:2px;text-align:center;font-size:1.1rem}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:14px 28px;border-radius:12px;border:none;font-size:1rem;font-weight:700;font-family:'Nunito',sans-serif;cursor:pointer;transition:all .15s;width:100%}
+.btn:active{transform:scale(.97)}
+.btn-purple{background:linear-gradient(135deg,var(--purple),var(--purple2));color:#fff;box-shadow:0 4px 20px rgba(124,92,252,.25)}
+.btn-teal{background:linear-gradient(135deg,var(--teal),var(--teal2));color:#fff}
+.btn-amber{background:linear-gradient(135deg,var(--amber),var(--amber2));color:#fff}
+.btn-red{background:var(--red);color:#fff}
+.btn-outline{background:transparent;border:1px solid rgba(124,92,252,.3);color:#c4b5fd}
+.btn-ghost{background:none;border:none;color:var(--muted);font-size:13px;padding:8px 16px;width:auto;cursor:pointer;font-family:'Nunito',sans-serif}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-sm{padding:10px 18px;font-size:.9rem;width:auto}
+.btn-row{display:flex;gap:8px}
+
+/* Answer grid */
+.answers{display:grid;gap:10px;width:100%;max-width:620px}
+.answers.cols-2{grid-template-columns:1fr 1fr}
+.ans-btn{border-radius:14px;padding:18px 14px;color:#fff;font-weight:700;font-size:1.05rem;border:3px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;min-height:60px;transition:all .15s;text-align:center;line-height:1.3}
+.ans-btn:active{transform:scale(.96)}
+.ans-btn.selected{border-color:#fff;transform:scale(1.03)}
+.ans-btn.faded{opacity:.35}
+.ans-btn .shape{font-size:1.2rem;opacity:.6}
+
+/* Scoreboard */
+.board{width:100%;max-width:400px}
+.board-row{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-radius:12px;margin-bottom:5px;background:var(--card);animation:popIn .4s ease both}
+.board-row.gold{background:rgba(250,204,21,.1)}
+.board-row.me{background:var(--purple-soft);border:1px solid rgba(124,92,252,.25)}
+
+/* Timer */
+.timer{display:flex;align-items:center;gap:6px}
+.timer-bar{width:80px;height:6px;background:var(--subtle);border-radius:3px;overflow:hidden}
+.timer-fill{height:100%;border-radius:3px;transition:width 1s linear}
+
+/* Quiz bank list */
+.bank-item{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-radius:12px;background:var(--card);border:1px solid var(--border);margin-bottom:8px;transition:border-color .2s}
+.bank-item:hover{border-color:rgba(124,92,252,.3)}
+.bank-name{font-weight:700;font-size:15px;color:#fff}
+.bank-count{font-size:12px;color:var(--muted)}
+.bank-actions{display:flex;gap:6px}
+.bank-actions button{background:var(--subtle);border:1px solid var(--border);border-radius:8px;padding:6px 12px;color:var(--text);font-size:12px;cursor:pointer;font-family:'Nunito',sans-serif;font-weight:600;transition:all .15s}
+.bank-actions button:hover{border-color:var(--purple)}
+.bank-actions .del:hover{border-color:var(--red);color:var(--red)}
+
+/* Editor */
+.q-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px}
+.q-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.opt-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.opt-check{width:26px;height:26px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border:2px solid var(--border);color:#fff;cursor:pointer;font-size:12px;background:var(--subtle);font-family:'Nunito',sans-serif}
+.opt-check.on{background:var(--green);border-color:var(--green)}
+.opt-check.round{border-radius:13px}.opt-check.square{border-radius:6px}
+
+/* Chips */
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;min-height:40px}
+.chip{border-radius:10px;padding:6px 16px;color:#fff;font-weight:700;font-size:14px;animation:popIn .3s ease}
+
+/* Badge */
+.badge{padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;display:inline-block}
+.badge-amber{background:rgba(245,158,11,.13);color:var(--amber)}
+.badge-green{background:rgba(34,197,94,.13);color:var(--green)}
+.badge-purple{background:var(--purple-soft);color:var(--purple)}
+.badge-correct{background:var(--subtle);border:2px solid var(--border);padding:8px 16px;border-radius:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px}
+
+/* Dots animation */
+.dots{display:flex;justify-content:center;gap:6px;margin-top:16px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--purple);animation:pulse 1.2s ease infinite}
+.dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
+
+/* Big elements */
+.big-code{font-family:'JetBrains Mono',monospace;font-size:3.2rem;color:#fff;letter-spacing:14px;font-weight:900;text-shadow:0 0 40px rgba(245,158,11,.3)}
+.trophy{font-size:3.5rem}
+.winner-name{font-family:'JetBrains Mono',monospace;font-size:2rem;font-weight:700;color:var(--amber)}
+
+/* Utility */
+.gap-8{display:flex;flex-direction:column;gap:8px}
+.gap-10{display:flex;flex-direction:column;gap:10px}
+.gap-14{display:flex;flex-direction:column;gap:14px}
+.center{text-align:center}
+.mt-4{margin-top:4px}.mt-8{margin-top:8px}.mt-12{margin-top:12px}.mt-16{margin-top:16px}.mt-20{margin-top:20px}.mt-24{margin-top:24px}.mt-28{margin-top:28px}
+.mb-4{margin-bottom:4px}.mb-8{margin-bottom:8px}.mb-12{margin-bottom:12px}.mb-16{margin-bottom:16px}.mb-24{margin-bottom:24px}
+.row{display:flex;align-items:center;justify-content:space-between;width:100%}
+.w100{width:100%}
+.err{color:var(--red);font-size:13px;text-align:center}
+.ok{color:var(--green);font-size:13px;text-align:center}
+.info{color:var(--muted);font-size:12px;text-align:center;max-width:340px;line-height:1.6}
+.sticky-head{position:sticky;top:0;z-index:10;background:var(--bg1);padding:12px 0;margin-bottom:12px}
+.bottom-bar{position:fixed;bottom:0;left:0;right:0;padding:12px 16px;background:linear-gradient(transparent,var(--bg1) 30%);display:flex;gap:10px;justify-content:center;z-index:10}
+.divider{width:100%;height:1px;background:var(--border);margin:16px 0}
+
+/* Colors */
+.c0{background:#e63946}.c1{background:#457b9d}.c2{background:#f4a261}.c3{background:#2a9d8f}.c4{background:#8b5cf6}.c5{background:#ec4899}
+.vf0{background:#457b9d}.vf1{background:#e63946}
+
+/* Role select cards */
+.role-card{background:var(--card);border:2px solid var(--border);border-radius:20px;padding:28px 24px;text-align:center;cursor:pointer;transition:all .2s;flex:1;max-width:180px}
+.role-card:hover{border-color:var(--purple);transform:translateY(-2px)}
+.role-card .icon{font-size:2.4rem;margin-bottom:8px}
+.role-card .label{font-weight:800;font-size:1rem;margin-bottom:4px}
+.role-card .desc{font-size:12px;color:var(--muted)}
+
+/* Detail results */
+.detail-q{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:12px}
+.detail-q-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+.detail-q-num{font-family:'JetBrains Mono',monospace;color:var(--amber);font-weight:800;font-size:12px;flex-shrink:0;margin-right:10px}
+.detail-q-text{font-weight:700;font-size:14px;line-height:1.4;flex:1}
+.detail-pct{font-family:'JetBrains Mono',monospace;font-weight:800;font-size:14px;flex-shrink:0;margin-left:10px}
+.detail-bar{width:100%;height:8px;background:var(--subtle);border-radius:4px;overflow:hidden;margin:8px 0 10px}
+.detail-bar-fill{height:100%;border-radius:4px;transition:width .4s ease}
+.detail-correct{color:var(--green);font-size:13px;font-weight:600;margin-bottom:8px}
+.detail-players{display:flex;flex-wrap:wrap;gap:4px}
+.detail-chip{padding:3px 10px;border-radius:6px;font-size:12px;font-weight:600}
+.detail-chip.ok{background:rgba(34,197,94,.12);color:var(--green)}
+.detail-chip.ko{background:rgba(239,68,68,.1);color:var(--red)}
+.detail-chip.partial{background:rgba(245,158,11,.1);color:var(--amber)}
+.tab-row{display:flex;gap:0;margin-bottom:20px;border-radius:10px;overflow:hidden;border:1px solid var(--border)}
+.tab-btn{flex:1;padding:10px;text-align:center;font-weight:700;font-size:14px;cursor:pointer;background:var(--subtle);border:none;color:var(--muted);font-family:'Nunito',sans-serif;transition:all .15s}
+.tab-btn.active{background:var(--purple);color:#fff}
+.player-stat{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:10px;background:var(--card);border:1px solid var(--border);margin-bottom:6px}
+.player-stat-name{font-weight:700;font-size:14px}
+.player-stat-bar{flex:1;margin:0 12px;height:6px;background:var(--subtle);border-radius:3px;overflow:hidden;max-width:120px}
+.player-stat-fill{height:100%;border-radius:3px}
+.player-stat-pct{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;min-width:40px;text-align:right}
+
+@keyframes popIn{from{opacity:0;transform:scale(.85) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes pulse{0%,100%{opacity:.3;transform:scale(1)}50%{opacity:1;transform:scale(1.5)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.fade-in{animation:fadeIn .35s ease}
+</style>
+</head>
+<body>
+
+<div id="app" class="app"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+
+<script>
+// ==========================================================
+// 🔥 CONFIGURATION FIREBASE — REMPLIS ICI
+// ==========================================================
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBfOrQttxjaNLGr2qjKyAfVIJjY7mzhoLQ",
+  authDomain: "quiz-7e1ae.firebaseapp.com",
+  databaseURL: "https://quiz-7e1ae-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "quiz-7e1ae",
+  storageBucket: "quiz-7e1ae.firebasestorage.app",
+  messagingSenderId: "105217218519",
+  appId: "1:105217218519:web:be5fe98759546fc9f2dd92"
+};
+// ==========================================================
+
+const TIMER_S = 20;
+const SHAPES = ["▲","◆","●","■","★","▼"];
+const COLORS = ["c0","c1","c2","c3","c4","c5"];
+const CHIP_COLORS = ["#e63946","#457b9d","#f4a261","#2a9d8f","#8b5cf6","#ec4899"];
+
+const SAMPLE_QUESTIONS = [
+  {q:"Quelles sont les actions des filtres sur le respirateur ?",type:"multi",options:["Prévenir les infections croisées","Filtrer bactéries / virus","Protéger le ventilateur","Conditionner les gaz"],answers:[0,1,2,3]},
+  {q:"Le filtre carré de la branche inspi du GE se change tous les 2 mois",type:"vf",options:["Vrai","Faux"],answers:[0]},
+  {q:"Dans quel cas mettre un humidificateur ?",type:"multi",options:["Pathologies respiratoires","Ventilation invasive longue","ACR"],answers:[0,1]},
+  {q:"Pourquoi mettre un humidificateur ?",type:"multi",options:["Débits importants","Confort du patient","Diminuer risque Barotraumatisme","Éviter dessèchement muqueuse respi"],answers:[0,1,3]},
+  {q:"Quand changer le système clos ?",type:"multi",options:["Tous les 72h pour la partie sonde","Tous les 6 jours pour la partie rien","Tous les 72h"],answers:[0,1]},
+  {q:"Le volume courant correspond au volume délivré à chaque cycle",type:"vf",options:["Vrai","Faux"],answers:[0]},
+  {q:"La FR réglée correspond toujours à la FR du patient ?",type:"vf",options:["Vrai","Faux"],answers:[1]},
+  {q:"La PEP permet d'éviter le collapsus ?",type:"vf",options:["Vrai","Faux"],answers:[0]},
+  {q:"L'augmentation de la PEP diminue la pression de plateau",type:"vf",options:["Vrai","Faux"],answers:[1]},
+  {q:"La pression crête dépend uniquement de la compliance pulmonaire ?",type:"vf",options:["Vrai","Faux"],answers:[1]},
+  {q:"Le temps de pause inspiratoire permet de mesurer la pression de plateau",type:"vf",options:["Vrai","Faux"],answers:[0]},
+  {q:"Le trigger permet au patient de déclencher le respi ?",type:"vf",options:["Vrai","Faux"],answers:[0]},
+  {q:"Le volume minute dépend uniquement du respirateur en mode VAC ?",type:"vf",options:["Vrai","Faux"],answers:[1]},
+  {q:"La pression de plateau reflète la compliance pulmonaire ?",type:"vf",options:["Vrai","Faux"],answers:[0]},
+  {q:"Quels paramètres vérifier quand le patient est en VSAi ?",type:"multi",options:["VT","FR","Pplateau","Saturation O2"],answers:[0,1,3]},
+  {q:"Plus le niveau d'Aide est important, plus le volume insufflé par le respirateur est important",type:"vf",options:["Vrai","Faux"],answers:[0]},
+];
+
+let db = null;
+let gameRef = null, playersRef = null;
+let timerInterval = null, currentTimer = TIMER_S;
+
+let S = {
+  screen:"home", error:"", msg:"",
+  // Admin
+  adminPw:"", banks:[], currentBank:null, editQ:[],
+  // Game
+  gameCode:"", gs:null, players:[], role:null,
+  // Player
+  playerName:"", joinCode:"", selectedAnswers:[], answered:false,
+  // Detail results
+  detailData:null, detailTab:"questions",
+};
+
+function setState(p){ Object.assign(S,p); render(); }
+function mkCode(){ return Math.random().toString(36).substring(2,8).toUpperCase(); }
+function mkId(){ return Date.now().toString(36)+Math.random().toString(36).substring(2,6); }
+function esc(s){ const d=document.createElement("div");d.textContent=s;return d.innerHTML; }
+
+// ============ FIREBASE ============
+function initFirebase(){
+  if(!FIREBASE_CONFIG.apiKey){ setState({screen:"config"}); return false; }
+  try{ firebase.initializeApp(FIREBASE_CONFIG); db=firebase.database(); return true; }
+  catch(e){ setState({screen:"config",error:"Erreur: "+e.message}); return false; }
+}
+
+// ============ ADMIN: Password ============
+async function checkAdminSetup(){
+  const snap = await db.ref("admin/password").once("value");
+  return snap.val();
+}
+async function setAdminPassword(pw){
+  await db.ref("admin/password").set(pw);
+}
+async function doAdminLogin(){
+  const pw = S.adminPw.trim();
+  if(!pw){ setState({error:"Entre le mot de passe !"}); return; }
+  const stored = await checkAdminSetup();
+  if(!stored){
+    // First time: set password
+    await setAdminPassword(pw);
+    setState({screen:"admin-dash",error:"",msg:""});
+    loadBanks();
+  } else if(stored === pw){
+    setState({screen:"admin-dash",error:"",msg:""});
+    loadBanks();
+  } else {
+    setState({error:"Mot de passe incorrect !"});
+  }
+}
+
+// ============ ADMIN: Question Banks ============
+async function loadBanks(){
+  const snap = await db.ref("banks").once("value");
+  const raw = snap.val()||{};
+  const banks = Object.entries(raw).map(([id,b])=>({id,...b}));
+  banks.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  setState({banks});
+}
+
+async function createBank(){
+  const id = mkId();
+  await db.ref("banks/"+id).set({
+    name:"Nouveau quiz",
+    createdAt:Date.now(),
+    questions: SAMPLE_QUESTIONS
+  });
+  await loadBanks();
+  // Open it for editing
+  openBankEditor(id);
+}
+
+async function deleteBank(id){
+  if(!confirm("Supprimer ce quiz définitivement ?")) return;
+  await db.ref("banks/"+id).remove();
+  loadBanks();
+}
+
+async function duplicateBank(id){
+  const snap = await db.ref("banks/"+id).once("value");
+  const bank = snap.val();
+  if(!bank) return;
+  const newId = mkId();
+  await db.ref("banks/"+newId).set({...bank, name:bank.name+" (copie)", createdAt:Date.now()});
+  loadBanks();
+}
+
+async function openBankEditor(id){
+  const snap = await db.ref("banks/"+id).once("value");
+  const bank = snap.val();
+  if(!bank) return;
+  setState({
+    screen:"admin-edit",
+    currentBank:{id,...bank},
+    editQ:JSON.parse(JSON.stringify(bank.questions||[])),
+    error:"", msg:""
+  });
+}
+
+async function saveBankQuestions(){
+  const qs = S.editQ.filter(q=>q.q.trim());
+  await db.ref("banks/"+S.currentBank.id+"/questions").set(qs);
+  setState({msg:"✓ Sauvegardé !"});
+  setTimeout(()=>setState({msg:""}),2000);
+}
+
+async function saveBankName(name){
+  await db.ref("banks/"+S.currentBank.id+"/name").set(name);
+  S.currentBank.name = name;
+}
+
+// ============ ADMIN: Launch Game ============
+async function launchGame(bankId){
+  const snap = await db.ref("banks/"+bankId).once("value");
+  const bank = snap.val();
+  if(!bank||!bank.questions?.length){ setState({error:"Ce quiz n'a pas de questions !"}); return; }
+  const code = mkCode();
+  const qs = bank.questions.filter(q=>q.q.trim()&&q.options.every(o=>o.trim()));
+  await db.ref("games/"+code).set({
+    state:{status:"lobby",currentQ:0,totalQ:qs.length,questions:qs,bankName:bank.name},
+    players:{}
+  });
+  setState({gameCode:code,role:"host",screen:"host-lobby",error:""});
+  listenGame(code);
+}
+
+// ============ GAME: Firebase listeners ============
+function listenGame(code){
+  stopListening();
+  gameRef = db.ref("games/"+code+"/state");
+  playersRef = db.ref("games/"+code+"/players");
+  gameRef.on("value",snap=>{
+    const g=snap.val(); if(!g)return;
+    const prev=S.gs; S.gs=g;
+    if(g.status==="question"&&(prev?.status!=="question"||prev?.currentQ!==g.currentQ)){
+      if(S.role==="host"){setState({screen:"host-q"});startTimer(true);}
+      else{setState({screen:"play-q",selectedAnswers:[],answered:false});startTimer(false);}
+    }else if(g.status==="results"&&prev?.status!=="results"){
+      stopTimer();setState({screen:S.role==="host"?"host-r":"play-w"});
+    }else if(g.status==="final"){
+      stopTimer();setState({screen:S.role==="host"?"host-f":"play-f"});
+      if(S.role==="host")saveGameHistory();
+    }else{render();}
+  });
+  playersRef.on("value",snap=>{
+    const p=snap.val();S.players=p?Object.values(p):[];
+    S.players.sort((a,b)=>b.score-a.score);render();
+  });
+}
+function stopListening(){
+  if(gameRef){gameRef.off();gameRef=null;}
+  if(playersRef){playersRef.off();playersRef=null;}
+  stopTimer();
+}
+
+// ============ TIMER ============
+function startTimer(isHost){
+  stopTimer();currentTimer=TIMER_S;render();
+  timerInterval=setInterval(()=>{
+    currentTimer--;
+    if(currentTimer<=0){stopTimer();if(isHost)doTimerEnd();}
+    render();
+  },1000);
+}
+function stopTimer(){if(timerInterval){clearInterval(timerInterval);timerInterval=null;}}
+
+// ============ HOST GAME ACTIONS ============
+async function doStart(){
+  await db.ref("games/"+S.gameCode+"/state").update({status:"question",currentQ:0});
+  await db.ref("games/"+S.gameCode+"/answers/0").remove();
+}
+async function doTimerEnd(){
+  const g=S.gs;if(!g)return;
+  const snap=await db.ref("games/"+S.gameCode+"/answers/"+g.currentQ).once("value");
+  const answers=Object.values(snap.val()||{});
+  const cSet=new Set(g.questions[g.currentQ].answers);
+  const isM=g.questions[g.currentQ].type==="multi";
+  const plSnap=await db.ref("games/"+S.gameCode+"/players").once("value");
+  const raw=plSnap.val()||{};
+  for(const[k,p]of Object.entries(raw)){
+    const a=answers.find(x=>x.name===p.name);
+    p.lastCorrect=false;p.lastPartial=false;
+    if(!a)continue;
+    const chosen=new Set(a.choices||[]);
+    if(isM){
+      const allOk=[...cSet].every(c=>chosen.has(c));
+      const noWrong=[...chosen].every(c=>cSet.has(c));
+      if(allOk&&noWrong){p.score=(p.score||0)+1000+Math.round((a.timeLeft/TIMER_S)*500);p.lastCorrect=true;}
+      else{const pt=Math.max(0,Math.round(([...chosen].filter(c=>cSet.has(c)).length/cSet.size)*500));p.score=(p.score||0)+pt;p.lastPartial=pt>0;}
+    }else{
+      if(cSet.has(a.choices?.[0])){p.score=(p.score||0)+1000+Math.round((a.timeLeft/TIMER_S)*500);p.lastCorrect=true;}
+    }
+  }
+  await db.ref("games/"+S.gameCode+"/players").set(raw);
+  await db.ref("games/"+S.gameCode+"/state").update({status:"results"});
+}
+async function doNext(){
+  const next=S.gs.currentQ+1;
+  if(next>=S.gs.totalQ){await db.ref("games/"+S.gameCode+"/state").update({status:"final"});}
+  else{await db.ref("games/"+S.gameCode+"/answers/"+next).remove();await db.ref("games/"+S.gameCode+"/state").update({status:"question",currentQ:next});}
+}
+
+// ============ PLAYER ACTIONS ============
+async function doJoin(){
+  const code=S.joinCode.toUpperCase().trim();
+  const name=S.playerName.trim();
+  if(!code||!name){setState({error:"Remplis le code et ton pseudo !"});return;}
+  try{
+    const snap=await db.ref("games/"+code+"/state").once("value");
+    const g=snap.val();
+    if(!g){setState({error:"Partie introuvable !"});return;}
+    if(g.status!=="lobby"){setState({error:"Déjà commencé !"});return;}
+    const plSnap=await db.ref("games/"+code+"/players").once("value");
+    const raw=plSnap.val()||{};
+    if(Object.values(raw).find(p=>p.name===name)){setState({error:"Pseudo déjà pris !"});return;}
+    await db.ref("games/"+code+"/players").push({name,score:0,lastCorrect:false,lastPartial:false});
+    setState({gameCode:code,role:"player",playerName:name,screen:"play-lobby",error:""});
+    listenGame(code);
+  }catch(e){setState({error:"Erreur: "+e.message});}
+}
+function doToggle(idx){
+  if(S.answered)return;
+  const q=S.gs.questions[S.gs.currentQ];
+  if(q.type==="multi"){
+    const sel=S.selectedAnswers.includes(idx)?S.selectedAnswers.filter(i=>i!==idx):[...S.selectedAnswers,idx];
+    setState({selectedAnswers:sel});
+  }else{setState({selectedAnswers:[idx]});doSubmit([idx]);}
+}
+async function doSubmit(choices){
+  if(S.answered)return;setState({answered:true});
+  await db.ref("games/"+S.gameCode+"/answers/"+S.gs.currentQ).push({name:S.playerName,choices,timeLeft:currentTimer});
+}
+
+// ============ EDITOR HELPERS ============
+function eQ(qi,f,v){
+  if(f==="q")S.editQ[qi].q=v;
+  else if(f==="type"){S.editQ[qi].type=v;if(v==="vf"){S.editQ[qi].options=["Vrai","Faux"];S.editQ[qi].answers=[0];}else if(S.editQ[qi].options.length<3){S.editQ[qi].options=["","","",""];S.editQ[qi].answers=[0];}}
+  else if(f.startsWith("opt"))S.editQ[qi].options[parseInt(f.replace("opt",""))]=v;
+  else if(f==="tog"){const ai=parseInt(v);const q=S.editQ[qi];if(q.type==="multi")q.answers=q.answers.includes(ai)?q.answers.filter(a=>a!==ai):[...q.answers,ai];else q.answers=[ai];}
+  render();
+}
+
+function doReset(){
+  stopListening();
+  setState({screen:"home",gs:null,players:[],gameCode:"",error:"",answered:false,selectedAnswers:[],role:null,msg:"",detailData:null,detailTab:"questions"});
+}
+function doBackToDash(){
+  stopListening();
+  setState({screen:"admin-dash",gs:null,players:[],gameCode:"",error:"",msg:"",detailData:null,detailTab:"questions"});
+  loadBanks();
+}
+
+// ============ DETAILED RESULTS ============
+async function loadDetailedResults(){
+  if(!S.gs||!S.gameCode)return;
+  const qs=S.gs.questions;
+  const totalQ=qs.length;
+  const allAnswers=[];
+  for(let i=0;i<totalQ;i++){
+    try{
+      const snap=await db.ref("games/"+S.gameCode+"/answers/"+i).once("value");
+      allAnswers.push(Object.values(snap.val()||{}));
+    }catch{allAnswers.push([]);}
+  }
+  // Build per-question stats
+  const qStats=qs.map((q,qi)=>{
+    const ans=allAnswers[qi]||[];
+    const cSet=new Set(q.answers);
+    const isM=q.type==="multi";
+    const playerResults=S.players.map(p=>{
+      const a=ans.find(x=>x.name===p.name);
+      if(!a)return{name:p.name,status:"missed",choices:[]};
+      const chosen=new Set(a.choices||[]);
+      if(isM){
+        const allOk=[...cSet].every(c=>chosen.has(c));
+        const noWrong=[...chosen].every(c=>cSet.has(c));
+        if(allOk&&noWrong)return{name:p.name,status:"correct",choices:a.choices};
+        const hasPartial=[...chosen].some(c=>cSet.has(c));
+        return{name:p.name,status:hasPartial?"partial":"wrong",choices:a.choices};
+      }else{
+        return{name:p.name,status:cSet.has(a.choices?.[0])?"correct":"wrong",choices:a.choices};
+      }
+    });
+    const nCorrect=playerResults.filter(r=>r.status==="correct").length;
+    const pct=S.players.length?Math.round((nCorrect/S.players.length)*100):0;
+    return{q:q.q,type:q.type,options:q.options,answers:q.answers,playerResults,nCorrect,pct};
+  });
+  // Build per-player stats
+  const pStats=S.players.map(p=>{
+    let correct=0,partial=0;
+    qStats.forEach(qs=>{
+      const r=qs.playerResults.find(x=>x.name===p.name);
+      if(r?.status==="correct")correct++;
+      else if(r?.status==="partial")partial++;
+    });
+    return{name:p.name,score:p.score,correct,partial,total:totalQ,pct:Math.round((correct/totalQ)*100)};
+  });
+  setState({detailData:{qStats,pStats},screen:S.role==="host"?"host-detail":"play-detail"});
+}
+
+// Save game results for history
+async function saveGameHistory(){
+  if(!S.gs||!S.gameCode)return;
+  try{
+    await db.ref("history/"+S.gameCode).set({
+      date:Date.now(),
+      bankName:S.gs.bankName||"",
+      players:S.players,
+      totalQ:S.gs.totalQ
+    });
+  }catch(e){console.error(e);}
+}
+
+// ============ RENDER HELPERS ============
+function timerHTML(){
+  const pct=(currentTimer/TIMER_S)*100;
+  const c=currentTimer<=3?"var(--red)":currentTimer<=7?"var(--amber)":"var(--green)";
+  return `<div class="timer"><div class="timer-bar"><div class="timer-fill" style="width:${pct}%;background:${c}"></div></div><span class="mono" style="color:${c};font-weight:800;font-size:15px;min-width:22px;text-align:right">${currentTimer}</span></div>`;
+}
+function boardHTML(hl){
+  return S.players.slice(0,15).map((p,i)=>{
+    const cls=i===0?"board-row gold":p.name===hl?"board-row me":"board-row";
+    const m=i===0?"🥇":i===1?"🥈":i===2?"🥉":`${i+1}.`;
+    const ck=p.lastCorrect?'<span style="color:var(--green);font-size:11px;margin-left:6px">✓</span>':p.lastPartial?'<span style="color:var(--amber);font-size:11px;margin-left:6px">~</span>':"";
+    return `<div class="${cls}" style="animation-delay:${i*0.06}s"><div style="display:flex;align-items:center"><span style="font-size:17px;width:28px;text-align:center;flex-shrink:0">${m}</span><span style="color:#fff;font-weight:600;font-size:14px;margin-left:10px">${esc(p.name)}</span>${ck}</div><span class="mono" style="color:var(--amber);font-weight:800">${p.score}</span></div>`;
+  }).join("");
+}
+function answerGrid(q, clickable, showSelected){
+  return q.options.map((opt,i)=>{
+    const base=q.options.length<=2?`vf${i}`:COLORS[i%COLORS.length];
+    let extra="";
+    if(showSelected){
+      if(S.selectedAnswers.includes(i))extra="selected";
+      else if(S.answered)extra="faded";
+    }
+    return `<button class="ans-btn ${base} ${extra}" data-ans="${i}" ${S.answered&&q.type!=="multi"?"disabled":""}><span class="shape">${SHAPES[i]||"◆"}</span> ${esc(opt)}</button>`;
+  }).join("");
+}
+
+// ============ MAIN RENDER ============
+function render(){
+  const root=document.getElementById("app");
+  root.innerHTML="";
+
+  // CONFIG
+  if(S.screen==="config"){
+    root.className="app";
+    root.innerHTML=`<div class="fade-in center" style="max-width:420px">
+      <div style="font-size:2.5rem;margin-bottom:12px">🔥</div>
+      <h2 class="title mb-8">Config <span>Firebase</span></h2>
+      <p style="color:var(--muted);font-size:14px;margin-bottom:20px">Ouvre le fichier HTML et remplis FIREBASE_CONFIG</p>
+      <div class="card gap-10" style="text-align:left">
+        <p style="font-size:13px;color:#94a3b8;line-height:1.8">1. <a href="https://console.firebase.google.com" target="_blank" style="color:var(--teal)">console.firebase.google.com</a> → Nouveau projet<br>
+        2. Build → Realtime Database → Mode test<br>
+        3. ⚙️ → Ajouter appli web → Copier la config<br>
+        4. Coller dans le fichier HTML<br>
+        5. Héberger (Netlify Drop = 30 sec)</p>
+      </div>
+      ${S.error?`<p class="err mt-12">${esc(S.error)}</p>`:""}
+    </div>`;
+    return;
+  }
+
+  // HOME — Role select
+  if(S.screen==="home"){
+    root.className="app";
+    root.innerHTML=`<div class="fade-in center">
+      <h1 class="title mb-4">QUIZ <span>BATTLE</span></h1>
+      <p style="color:var(--muted);font-size:.95rem;margin-bottom:36px">Quiz multijoueur en temps réel</p>
+      <div style="display:flex;gap:16px;margin-bottom:32px">
+        <div class="role-card" id="role-admin"><div class="icon">👨‍💼</div><div class="label">Admin</div><div class="desc">Gérer les quiz et lancer des parties</div></div>
+        <div class="role-card" id="role-player"><div class="icon">🎮</div><div class="label">Joueur</div><div class="desc">Rejoindre une partie avec un code</div></div>
+      </div>
+    </div>`;
+    document.getElementById("role-admin").onclick=()=>setState({screen:"admin-login",error:"",adminPw:""});
+    document.getElementById("role-player").onclick=()=>setState({screen:"player-join",error:""});
+    return;
+  }
+
+  // ADMIN LOGIN
+  if(S.screen==="admin-login"){
+    root.className="app";
+    root.innerHTML=`<div class="fade-in center" style="width:100%;max-width:340px">
+      <div style="font-size:2.2rem;margin-bottom:8px">🔐</div>
+      <h2 class="title mb-4" style="font-size:1.5rem">Admin</h2>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:24px">Première connexion = création du mot de passe</p>
+      <div class="gap-10 w100">
+        <input type="password" id="inp-pw" class="pw-input" placeholder="Mot de passe" value="${esc(S.adminPw)}">
+        <button class="btn btn-purple" id="btn-pw">Connexion</button>
+        ${S.error?`<p class="err">${esc(S.error)}</p>`:""}
+      </div>
+      <button class="btn-ghost mt-20" id="btn-back">← Retour</button>
+    </div>`;
+    document.getElementById("inp-pw").oninput=e=>S.adminPw=e.target.value;
+    document.getElementById("inp-pw").onkeydown=e=>{if(e.key==="Enter")doAdminLogin();};
+    document.getElementById("btn-pw").onclick=doAdminLogin;
+    document.getElementById("btn-back").onclick=doReset;
+    return;
+  }
+
+  // ADMIN DASHBOARD
+  if(S.screen==="admin-dash"){
+    root.className="scroll-page";
+    const banksHTML=S.banks.length?S.banks.map(b=>{
+      const n=b.questions?.length||0;
+      return `<div class="bank-item">
+        <div><div class="bank-name">${esc(b.name)}</div><div class="bank-count">${n} question${n!==1?"s":""}</div></div>
+        <div class="bank-actions">
+          <button data-edit="${b.id}">✏️</button>
+          <button data-play="${b.id}" style="background:var(--purple-soft);color:var(--purple)">▶️</button>
+          <button data-dup="${b.id}">📋</button>
+          <button class="del" data-del="${b.id}">🗑</button>
+        </div>
+      </div>`;
+    }).join(""):`<div class="center" style="padding:40px 0"><p style="color:var(--muted);font-size:14px">Aucun quiz pour l'instant</p></div>`;
+
+    root.innerHTML=`
+      <div class="sticky-head row">
+        <button class="btn-ghost" id="btn-logout">← Déconnexion</button>
+        <h2 class="title" style="font-size:1.3rem">📚 Mes <span>Quiz</span></h2>
+        <div></div>
+      </div>
+      <div class="mb-16">${banksHTML}</div>
+      <button class="btn btn-purple" id="btn-newbank" style="max-width:300px;margin:0 auto">+ Nouveau quiz</button>
+      ${S.error?`<p class="err mt-12">${esc(S.error)}</p>`:""}
+    `;
+    document.getElementById("btn-logout").onclick=doReset;
+    document.getElementById("btn-newbank").onclick=createBank;
+    root.querySelectorAll("[data-edit]").forEach(el=>el.onclick=()=>openBankEditor(el.dataset.edit));
+    root.querySelectorAll("[data-play]").forEach(el=>el.onclick=()=>launchGame(el.dataset.play));
+    root.querySelectorAll("[data-dup]").forEach(el=>el.onclick=()=>duplicateBank(el.dataset.dup));
+    root.querySelectorAll("[data-del]").forEach(el=>el.onclick=()=>deleteBank(el.dataset.del));
+    return;
+  }
+
+  // ADMIN EDIT QUIZ
+  if(S.screen==="admin-edit"&&S.currentBank){
+    root.className="scroll-page";
+    let qHTML=S.editQ.map((q,qi)=>{
+      const optsHTML=q.options.map((opt,oi)=>{
+        const on=q.answers.includes(oi);
+        const sh=q.type==="multi"?"square":"round";
+        return `<div class="opt-row">
+          <button class="opt-check ${sh} ${on?"on":""}" data-qi="${qi}" data-oi="${oi}">${on?"✓":""}</button>
+          <input value="${esc(opt)}" placeholder="Réponse ${oi+1}" data-optqi="${qi}" data-optoi="${oi}" ${q.type==="vf"?"readonly":""}>
+          ${q.type!=="vf"&&q.options.length>2?`<button class="btn-ghost" data-delopt="${qi}-${oi}" style="font-size:14px;padding:4px 8px">✕</button>`:""}
+        </div>`;
+      }).join("");
+      return `<div class="q-card">
+        <div class="q-head">
+          <div style="display:flex;gap:6px;align-items:center">
+            <span class="mono" style="color:var(--amber);font-size:13px;font-weight:800">#${qi+1}</span>
+            <select data-typesel="${qi}" style="background:var(--subtle);color:#94a3b8;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:12px">
+              <option value="vf" ${q.type==="vf"?"selected":""}>Vrai / Faux</option>
+              <option value="multi" ${q.type==="multi"?"selected":""}>Multi-réponses</option>
+              <option value="single" ${q.type==="single"?"selected":""}>Choix unique</option>
+            </select>
+          </div>
+          ${S.editQ.length>1?`<button class="btn-ghost" data-delq="${qi}" style="color:var(--red);font-size:16px">✕</button>`:""}
+        </div>
+        <input value="${esc(q.q)}" placeholder="Ta question..." data-qinput="${qi}" style="font-weight:600;margin-bottom:8px">
+        ${optsHTML}
+        ${q.type!=="vf"&&q.options.length<6?`<button class="btn-ghost" data-addopt="${qi}" style="font-size:12px;margin-top:2px">+ option</button>`:""}
+      </div>`;
+    }).join("");
+
+    root.innerHTML=`
+      <div class="sticky-head">
+        <div class="row">
+          <button class="btn-ghost" id="btn-backdash">← Quiz</button>
+          <input id="inp-bankname" value="${esc(S.currentBank.name)}" style="max-width:200px;text-align:center;font-weight:700;font-size:15px">
+          <span class="mono" style="color:var(--muted);font-size:13px">${S.editQ.length}q</span>
+        </div>
+        ${S.msg?`<p class="ok mt-4">${esc(S.msg)}</p>`:""}
+      </div>
+      ${qHTML}
+      <div class="bottom-bar">
+        <button class="btn btn-outline btn-sm" id="btn-addq" style="flex:1;max-width:140px">+ Question</button>
+        <button class="btn btn-purple btn-sm" id="btn-save" style="flex:1;max-width:160px">💾 Sauvegarder</button>
+        <button class="btn btn-teal btn-sm" id="btn-playedit" style="flex:1;max-width:140px">▶️ Jouer</button>
+      </div>
+    `;
+    document.getElementById("btn-backdash").onclick=doBackToDash;
+    document.getElementById("btn-addq").onclick=()=>{S.editQ.push({q:"",type:"vf",options:["Vrai","Faux"],answers:[0]});render();};
+    document.getElementById("btn-save").onclick=saveBankQuestions;
+    document.getElementById("btn-playedit").onclick=async()=>{await saveBankQuestions();launchGame(S.currentBank.id);};
+    document.getElementById("inp-bankname").onchange=e=>saveBankName(e.target.value);
+
+    root.querySelectorAll("[data-qinput]").forEach(el=>el.oninput=e=>eQ(+e.target.dataset.qinput,"q",e.target.value));
+    root.querySelectorAll("[data-typesel]").forEach(el=>el.onchange=e=>eQ(+e.target.dataset.typesel,"type",e.target.value));
+    root.querySelectorAll("[data-delq]").forEach(el=>el.onclick=()=>{if(S.editQ.length>1){S.editQ.splice(+el.dataset.delq,1);render();}});
+    root.querySelectorAll(".opt-check").forEach(el=>el.onclick=()=>eQ(+el.dataset.qi,"tog",el.dataset.oi));
+    root.querySelectorAll("[data-optqi]").forEach(el=>el.oninput=e=>eQ(+e.target.dataset.optqi,"opt"+e.target.dataset.optoi,e.target.value));
+    root.querySelectorAll("[data-addopt]").forEach(el=>el.onclick=()=>{const qi=+el.dataset.addopt;if(S.editQ[qi].options.length<6){S.editQ[qi].options.push("");render();}});
+    root.querySelectorAll("[data-delopt]").forEach(el=>{const[qi,oi]=el.dataset.delopt.split("-").map(Number);el.onclick=()=>{if(S.editQ[qi].options.length>2){S.editQ[qi].options.splice(oi,1);S.editQ[qi].answers=S.editQ[qi].answers.filter(a=>a!==oi).map(a=>a>oi?a-1:a);render();}}});
+    return;
+  }
+
+  // PLAYER JOIN
+  if(S.screen==="player-join"){
+    root.className="app";
+    root.innerHTML=`<div class="fade-in center" style="width:100%;max-width:340px">
+      <div style="font-size:2.2rem;margin-bottom:8px">🎮</div>
+      <h2 class="title mb-24" style="font-size:1.5rem">Rejoindre</h2>
+      <div class="gap-10 w100">
+        <input id="inp-name" placeholder="Ton pseudo" value="${esc(S.playerName)}">
+        <input id="inp-code" class="code-input" placeholder="CODE" maxlength="6" value="${esc(S.joinCode)}">
+        <button class="btn btn-teal" id="btn-join">🚀 Rejoindre la partie</button>
+        ${S.error?`<p class="err">${esc(S.error)}</p>`:""}
+      </div>
+      <button class="btn-ghost mt-20" id="btn-back">← Retour</button>
+    </div>`;
+    document.getElementById("inp-name").oninput=e=>S.playerName=e.target.value;
+    document.getElementById("inp-code").oninput=e=>S.joinCode=e.target.value.toUpperCase();
+    document.getElementById("inp-code").onkeydown=e=>{if(e.key==="Enter")doJoin();};
+    document.getElementById("btn-join").onclick=doJoin;
+    document.getElementById("btn-back").onclick=doReset;
+    return;
+  }
+
+  // HOST LOBBY
+  if(S.screen==="host-lobby"){
+    root.className="app";
+    const chips=S.players.map((p,i)=>`<div class="chip" style="background:${CHIP_COLORS[i%CHIP_COLORS.length]}22;border:2px solid ${CHIP_COLORS[i%CHIP_COLORS.length]}66">${esc(p.name)}</div>`).join("");
+    const bankName=S.gs?.bankName||"";
+    root.innerHTML=`<div class="fade-in center">
+      ${bankName?`<span class="badge badge-purple mb-12">${esc(bankName)}</span>`:""}
+      <p style="color:var(--muted);font-size:13px;margin-bottom:4px">CODE DE PARTIE</p>
+      <div class="big-code mb-24">${S.gameCode}</div>
+      <div class="card center" style="padding:20px;max-width:380px">
+        <p style="color:#94a3b8;margin-bottom:14px;font-size:14px">Joueurs connectés</p>
+        <div class="chips">${chips||'<p style="color:var(--muted);font-size:13px">En attente...</p>'}</div>
+      </div>
+      <button class="btn btn-purple mt-24" id="btn-start" ${!S.players.length?"disabled":""} style="max-width:340px">▶️ Démarrer (${S.players.length} joueur${S.players.length!==1?"s":""})</button>
+      <button class="btn-ghost mt-16" id="btn-cancel">Annuler</button>
+    </div>`;
+    document.getElementById("btn-start").onclick=doStart;
+    document.getElementById("btn-cancel").onclick=doBackToDash;
+    return;
+  }
+
+  // HOST QUESTION
+  if(S.screen==="host-q"&&S.gs){
+    root.className="app";
+    const q=S.gs.questions[S.gs.currentQ];const isM=q.type==="multi";
+    root.innerHTML=`<div class="fade-in center w100" style="max-width:640px">
+      <div class="row mb-12" style="max-width:620px;margin:0 auto">
+        <span class="mono" style="color:var(--muted);font-size:13px">${S.gs.currentQ+1}/${S.gs.totalQ}</span>
+        ${isM?'<span class="badge badge-amber">MULTI-RÉPONSES</span>':""}
+        ${timerHTML()}
+      </div>
+      <div class="card card-lg center mb-20" style="padding:24px 20px">
+        <h2 style="font-size:1.3rem;line-height:1.5;font-weight:700">${esc(q.q)}</h2>
+      </div>
+      <div class="answers cols-2" style="max-width:620px;margin:0 auto">${answerGrid(q,false,false)}</div>
+    </div>`;
+    return;
+  }
+
+  // HOST RESULTS
+  if(S.screen==="host-r"&&S.gs){
+    root.className="app";
+    const q=S.gs.questions[S.gs.currentQ];
+    const cHTML=q.answers.map(ai=>`<span class="badge-correct">${SHAPES[ai]||"◆"} ${esc(q.options[ai])}</span>`).join(" ");
+    root.innerHTML=`<div class="fade-in center">
+      <p style="color:var(--green);font-weight:700;font-size:13px;margin-bottom:10px">${q.answers.length>1?"BONNES RÉPONSES":"BONNE RÉPONSE"}</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:24px">${cHTML}</div>
+      <div class="board">${boardHTML()}</div>
+      <button class="btn btn-purple mt-20" id="btn-next" style="max-width:340px">${S.gs.currentQ+1>=S.gs.totalQ?"🏆 Résultats finaux":"➡️ Suivante"}</button>
+    </div>`;
+    document.getElementById("btn-next").onclick=doNext;
+    return;
+  }
+
+  // FINAL
+  if(S.screen==="host-f"||S.screen==="play-f"){
+    root.className="app";
+    const w=S.players[0];const me=S.players.find(p=>p.name===S.playerName);
+    const mr=S.players.findIndex(p=>p.name===S.playerName)+1;
+    const medal=mr===1?"🥇":mr===2?"🥈":mr===3?"🥉":`#${mr}`;
+    root.innerHTML=`<div class="fade-in center">
+      <div class="trophy">🏆</div>
+      <h1 class="winner-name mt-8">${esc(w?.name||"—")}</h1>
+      <p style="color:#94a3b8;margin:6px 0">remporte la partie !</p>
+      ${S.screen==="play-f"&&me?`<p style="color:#c084fc;font-weight:700;margin-bottom:20px">${medal} — ${me.score} pts</p>`:""}
+      <div class="board mt-16">${boardHTML(S.playerName)}</div>
+      <div style="display:flex;gap:10px;margin-top:24px;max-width:380px;width:100%">
+        <button class="btn btn-outline" id="btn-detail" style="flex:1">📊 Détail</button>
+        <button class="btn btn-purple" id="btn-end" style="flex:1">${S.role==="host"?"📚 Mes quiz":"🔄 Rejouer"}</button>
+      </div>
+    </div>`;
+    document.getElementById("btn-detail").onclick=loadDetailedResults;
+    document.getElementById("btn-end").onclick=S.role==="host"?doBackToDash:doReset;
+    return;
+  }
+
+  // HOST/PLAYER DETAIL RESULTS
+  if((S.screen==="host-detail"||S.screen==="play-detail")&&S.detailData){
+    root.className="scroll-page";
+    const d=S.detailData;
+    const isHost=S.screen==="host-detail";
+    const tab=S.detailTab||"questions";
+
+    // Tabs
+    let content="";
+    if(tab==="questions"){
+      content=d.qStats.map((qs,qi)=>{
+        const barColor=qs.pct>=70?"var(--green)":qs.pct>=40?"var(--amber)":"var(--red)";
+        const correctOpts=qs.answers.map(ai=>`<span style="color:var(--green)">${SHAPES[ai]||"◆"} ${esc(qs.options[ai])}</span>`).join(", ");
+        const playersHTML=qs.playerResults.map(r=>{
+          const cls=r.status==="correct"?"ok":r.status==="partial"?"partial":"ko";
+          const icon=r.status==="correct"?"✓":r.status==="partial"?"~":"✗";
+          return `<span class="detail-chip ${cls}">${icon} ${esc(r.name)}</span>`;
+        }).join("");
+        return `<div class="detail-q">
+          <div class="detail-q-head">
+            <span class="detail-q-num">Q${qi+1}</span>
+            <span class="detail-q-text">${esc(qs.q)}</span>
+            <span class="detail-pct" style="color:${barColor}">${qs.pct}%</span>
+          </div>
+          <div class="detail-bar"><div class="detail-bar-fill" style="width:${qs.pct}%;background:${barColor}"></div></div>
+          <div class="detail-correct">✓ ${correctOpts}</div>
+          <div class="detail-players">${playersHTML}</div>
+        </div>`;
+      }).join("");
+    } else {
+      // Per-player tab
+      content=d.pStats.map((ps,i)=>{
+        const barColor=ps.pct>=70?"var(--green)":ps.pct>=40?"var(--amber)":"var(--red)";
+        const medal=i===0?"🥇 ":i===1?"🥈 ":i===2?"🥉 ":"";
+        return `<div class="player-stat">
+          <div>
+            <div class="player-stat-name">${medal}${esc(ps.name)}</div>
+            <div style="font-size:12px;color:var(--muted)">${ps.correct}/${ps.total} correct${ps.partial?` · ${ps.partial} partiel`:""} · ${ps.score} pts</div>
+          </div>
+          <div class="player-stat-bar"><div class="player-stat-fill" style="width:${ps.pct}%;background:${barColor}"></div></div>
+          <span class="player-stat-pct" style="color:${barColor}">${ps.pct}%</span>
+        </div>`;
+      }).join("");
+    }
+
+    // Global stats
+    const avgPct=d.qStats.length?Math.round(d.qStats.reduce((a,q)=>a+q.pct,0)/d.qStats.length):0;
+    const hardest=d.qStats.reduce((min,q)=>q.pct<min.pct?q:min,d.qStats[0]);
+    const easiest=d.qStats.reduce((max,q)=>q.pct>max.pct?q:max,d.qStats[0]);
+
+    root.innerHTML=`
+      <div class="sticky-head">
+        <div class="row">
+          <button class="btn-ghost" id="btn-backfinal">← Podium</button>
+          <h2 class="title" style="font-size:1.2rem">📊 <span>Résultats</span></h2>
+          <div></div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;justify-content:center">
+        <div class="card center" style="flex:1;min-width:100px;padding:12px">
+          <div class="mono" style="font-size:1.4rem;font-weight:800;color:${avgPct>=60?"var(--green)":"var(--amber)"}">${avgPct}%</div>
+          <div style="font-size:11px;color:var(--muted)">Moyenne</div>
+        </div>
+        <div class="card center" style="flex:1;min-width:100px;padding:12px">
+          <div class="mono" style="font-size:1.4rem;font-weight:800;color:var(--green)">${easiest.pct}%</div>
+          <div style="font-size:11px;color:var(--muted)">+ Facile</div>
+        </div>
+        <div class="card center" style="flex:1;min-width:100px;padding:12px">
+          <div class="mono" style="font-size:1.4rem;font-weight:800;color:var(--red)">${hardest.pct}%</div>
+          <div style="font-size:11px;color:var(--muted)">+ Difficile</div>
+        </div>
+      </div>
+
+      <div class="tab-row">
+        <button class="tab-btn ${tab==="questions"?"active":""}" data-tab="questions">📝 Questions</button>
+        <button class="tab-btn ${tab==="players"?"active":""}" data-tab="players">👥 Joueurs</button>
+      </div>
+
+      ${content}
+
+      <div style="height:40px"></div>
+    `;
+    document.getElementById("btn-backfinal").onclick=()=>setState({screen:isHost?"host-f":"play-f"});
+    root.querySelectorAll("[data-tab]").forEach(el=>el.onclick=()=>setState({detailTab:el.dataset.tab}));
+    return;
+  }
+
+  // PLAYER LOBBY
+  if(S.screen==="play-lobby"){
+    root.className="app";
+    root.innerHTML=`<div class="fade-in center">
+      <div style="font-size:2.5rem;margin-bottom:10px">✅</div>
+      <h2 class="title" style="font-size:1.5rem">C'est bon !</h2>
+      <p style="color:#c084fc;font-size:1.1rem;font-weight:700;margin:6px 0 28px">${esc(S.playerName)}</p>
+      <div class="card center" style="padding:24px;max-width:300px">
+        <p style="color:#94a3b8;font-size:14px">En attente du lancement...</p>
+        <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+      </div>
+      <button class="btn-ghost mt-20" id="btn-quit">Quitter</button>
+    </div>`;
+    document.getElementById("btn-quit").onclick=doReset;
+    return;
+  }
+
+  // PLAYER QUESTION
+  if(S.screen==="play-q"&&S.gs){
+    root.className="app";
+    const q=S.gs.questions[S.gs.currentQ];const isM=q.type==="multi";
+    root.innerHTML=`<div class="fade-in center w100" style="max-width:540px">
+      <div class="row mb-8" style="max-width:520px;margin:0 auto">
+        <span class="mono" style="color:var(--muted);font-size:13px">${S.gs.currentQ+1}/${S.gs.totalQ}</span>
+        ${isM?'<span class="badge badge-amber">MULTI</span>':""}
+        ${timerHTML()}
+      </div>
+      <div class="card center mb-16" style="padding:18px 16px;max-width:520px">
+        <h2 style="font-size:1.15rem;line-height:1.5;font-weight:700">${esc(q.q)}</h2>
+      </div>
+      <div class="answers cols-2" style="max-width:520px;margin:0 auto">${answerGrid(q,true,true)}</div>
+      ${isM&&!S.answered?`<button class="btn btn-purple mt-16" id="btn-val" ${!S.selectedAnswers.length?"disabled":""} style="max-width:340px">Valider (${S.selectedAnswers.length})</button>`:""}
+      ${S.answered?'<p style="color:var(--green);margin-top:14px;font-weight:700;font-size:14px">✓ Envoyé !</p>':""}
+    </div>`;
+    root.querySelectorAll("[data-ans]").forEach(el=>el.onclick=()=>doToggle(+el.dataset.ans));
+    const vb=document.getElementById("btn-val");if(vb)vb.onclick=()=>doSubmit(S.selectedAnswers);
+    return;
+  }
+
+  // PLAYER WAIT
+  if(S.screen==="play-w"){
+    root.className="app";
+    const me=S.players.find(p=>p.name===S.playerName);
+    const rank=S.players.findIndex(p=>p.name===S.playerName)+1;
+    const emoji=me?.lastCorrect?"🎉":me?.lastPartial?"🤏":"😬";
+    const msg=me?.lastCorrect?"Bravo !":me?.lastPartial?"Presque !":"Raté !";
+    const clr=me?.lastCorrect?"var(--green)":me?.lastPartial?"var(--amber)":"var(--red)";
+    const medal=rank===1?"🥇":rank===2?"🥈":rank===3?"🥉":`#${rank}`;
+    root.innerHTML=`<div class="fade-in center">
+      <div style="font-size:3rem;margin-bottom:8px">${emoji}</div>
+      <h2 class="title" style="font-size:1.4rem;color:${clr}">${msg}</h2>
+      <p style="color:#c084fc;font-size:1.1rem;margin:8px 0;font-weight:700">${medal} — ${me?.score||0} pts</p>
+      <p style="color:var(--muted);font-size:13px;margin-top:20px">Question suivante...</p>
+    </div>`;
+    return;
+  }
+}
+
+// ============ BOOT ============
+window.addEventListener("DOMContentLoaded",()=>{
+  if(initFirebase()) setState({screen:"home"});
+});
+</script>
+</body>
+</html>
