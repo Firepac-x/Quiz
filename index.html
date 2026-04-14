@@ -208,6 +208,7 @@ body::after{width:350px;height:350px;background:rgba(52,211,153,.04);bottom:-80p
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 
 <script>
 // ==========================================================
@@ -277,10 +278,18 @@ function mkId(){ return Date.now().toString(36)+Math.random().toString(36).subst
 function esc(s){ const d=document.createElement("div");d.textContent=s;return d.innerHTML; }
 
 // ============ FIREBASE ============
-function initFirebase(){
+let authUid = null;
+async function initFirebase(){
   if(!FIREBASE_CONFIG.apiKey){ setState({screen:"config"}); return false; }
-  try{ firebase.initializeApp(FIREBASE_CONFIG); db=firebase.database(); return true; }
-  catch(e){ setState({screen:"config",error:"Erreur: "+e.message}); return false; }
+  try{
+    firebase.initializeApp(FIREBASE_CONFIG);
+    db=firebase.database();
+    // Anonymous auth
+    const auth = firebase.auth();
+    const cred = await auth.signInAnonymously();
+    authUid = cred.user.uid;
+    return true;
+  }catch(e){ setState({screen:"config",error:"Erreur: "+e.message}); return false; }
 }
 
 // ============ ADMIN: Password ============
@@ -296,11 +305,14 @@ async function doAdminLogin(){
   if(!pw){ setState({error:"Entre le mot de passe !"}); return; }
   const stored = await checkAdminSetup();
   if(!stored){
-    // First time: set password
-    await setAdminPassword(pw);
+    // First time: set password + store admin UID
+    await db.ref("admin/password").set(pw);
+    await db.ref("admin/uid").set(authUid);
     setState({screen:"admin-dash",error:"",msg:""});
     loadBanks();
   } else if(stored === pw){
+    // Update admin UID on each successful login
+    await db.ref("admin/uid").set(authUid);
     setState({screen:"admin-dash",error:"",msg:""});
     loadBanks();
   } else {
@@ -2051,8 +2063,9 @@ function downloadQR(){
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
 
-window.addEventListener("DOMContentLoaded",()=>{
-  if(!initFirebase()) return;
+window.addEventListener("DOMContentLoaded",async()=>{
+  const ok = await initFirebase();
+  if(!ok) return;
   // Check if player arrived via QR code with hash code
   const hash = window.location.hash.replace("#","").trim();
   if(hash && hash.length === 6 && !isAdmin()){
