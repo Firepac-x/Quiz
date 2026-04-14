@@ -190,6 +190,11 @@ body::after{width:350px;height:350px;background:rgba(52,211,153,.04);bottom:-80p
 @keyframes float{0%,100%{transform:translate(0,0)}50%{transform:translate(30px,-30px)}}
 .fade-in{animation:fadeIn .4s ease}
 
+/* Category tabs */
+.cat-tab{padding:8px 16px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:1px solid var(--border);background:var(--card);color:var(--muted);font-family:'Outfit',sans-serif;white-space:nowrap;transition:all .2s;flex-shrink:0}
+.cat-tab:hover{border-color:var(--purple-glow);color:var(--text)}
+.cat-tab.active{background:var(--purple);color:#fff;border-color:var(--purple);box-shadow:0 4px 15px rgba(139,108,255,.25)}
+
 /* Scrollbar */
 ::-webkit-scrollbar{width:6px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -247,11 +252,12 @@ let db = null;
 let gameRef = null, playersRef = null;
 let timerInterval = null, currentTimer = 20, currentTimerTotal = 20;
 let lastPlayersJSON = "";
+let isProcessingTimerEnd = false;
 
 let S = {
   screen:"home", error:"", msg:"",
   // Admin
-  adminPw:"", banks:[], currentBank:null, editQ:[],
+  adminPw:"", banks:[], currentBank:null, editQ:[], categoryFilter:"all",
   // Game
   gameCode:"", gs:null, players:[], role:null,
   // Player
@@ -260,6 +266,9 @@ let S = {
   detailData:null, detailTab:"questions",
   // Import
   importText:"",
+  // Solo mode
+  solo:null, // {questions, currentQ, score, answers:[], timerSec}
+  soloSel:[], soloAnswered:false,
 };
 
 function setState(p){ Object.assign(S,p); render(); }
@@ -300,23 +309,32 @@ async function doAdminLogin(){
 }
 
 // ============ ADMIN: Question Banks ============
+const DEFAULT_CATEGORIES = ["🚒 Pompier","🏥 Infirmier","📚 Autre"];
+
 async function loadBanks(){
   const snap = await db.ref("banks").once("value");
   const raw = snap.val()||{};
-  const banks = Object.entries(raw).map(([id,b])=>({id,...b}));
-  banks.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  const banks = Object.entries(raw).map(([id,b])=>({id,...b, category:b.category||"📚 Autre"}));
+  banks.sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   setState({banks});
 }
 
-async function createBank(){
+function getCategories(){
+  const cats = new Set(DEFAULT_CATEGORIES);
+  S.banks.forEach(b => { if(b.category) cats.add(b.category); });
+  return [...cats].sort();
+}
+
+async function createBank(category){
   const id = mkId();
+  const cat = category || S.categoryFilter || "📚 Autre";
   await db.ref("banks/"+id).set({
     name:"Nouveau quiz",
+    category: cat === "all" ? "📚 Autre" : cat,
     createdAt:Date.now(),
     questions: SAMPLE_QUESTIONS
   });
   await loadBanks();
-  // Open it for editing
   openBankEditor(id);
 }
 
@@ -341,7 +359,7 @@ async function openBankEditor(id){
   if(!bank) return;
   setState({
     screen:"admin-edit",
-    currentBank:{id,...bank,timerSeconds:bank.timerSeconds||DEFAULT_TIMER},
+    currentBank:{id,...bank,category:bank.category||"📚 Autre",timerSeconds:bank.timerSeconds||DEFAULT_TIMER},
     editQ:JSON.parse(JSON.stringify(bank.questions||[])),
     error:"", msg:""
   });
@@ -359,13 +377,38 @@ async function saveBankName(name){
   S.currentBank.name = name;
 }
 
+async function saveBankCategory(cat){
+  await db.ref("banks/"+S.currentBank.id+"/category").set(cat);
+  S.currentBank.category = cat;
+}
+
+// ============ SHUFFLE ============
+function shuffleArray(arr){
+  const a = [...arr];
+  for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}
+  return a;
+}
+function shuffleQuestion(q){
+  // Shuffle options and remap answer indices
+  const indices = q.options.map((_,i)=>i);
+  const shuffled = shuffleArray(indices);
+  const newOptions = shuffled.map(i=>q.options[i]);
+  const newAnswers = q.answers.map(a=>shuffled.indexOf(a));
+  return {...q, options:newOptions, answers:newAnswers};
+}
+function shuffleQuiz(questions){
+  return shuffleArray(questions).map(q=>q.type==="vf"?q:shuffleQuestion(q));
+}
+
 // ============ ADMIN: Launch Game ============
 async function launchGame(bankId){
   const snap = await db.ref("banks/"+bankId).once("value");
   const bank = snap.val();
   if(!bank||!bank.questions?.length){ setState({error:"Ce quiz n'a pas de questions !"}); return; }
   const code = mkCode();
-  const qs = bank.questions.filter(q=>q.q.trim()&&q.options.every(o=>o.trim()));
+  const rawQs = bank.questions.filter(q=>q.q.trim()&&q.options.every(o=>o.trim()));
+  if(!rawQs.length){ setState({error:"Ce quiz n'a pas de questions valides !"}); return; }
+  const qs = shuffleQuiz(rawQs);
   const timerSec = bank.timerSeconds || DEFAULT_TIMER;
   await db.ref("games/"+code).set({
     state:{status:"lobby",currentQ:0,totalQ:qs.length,questions:qs,bankName:bank.name,timerSeconds:timerSec},
@@ -384,12 +427,17 @@ function listenGame(code){
     const g=snap.val(); if(!g)return;
     const prev=S.gs; S.gs=g;
     if(g.status==="question"&&(prev?.status!=="question"||prev?.currentQ!==g.currentQ)){
-      if(S.role==="host"){setState({screen:"host-q"});startTimer(true);}
-      else{setState({screen:"play-q",selectedAnswers:[],answered:false});startTimer(false);}
+      // Show 3-2-1 countdown before question
+      showCountdown(()=>{
+        // Verify game is still in "question" status (could have changed during countdown)
+        if(!S.gs || S.gs.status!=="question") return;
+        if(S.role==="host"){setState({screen:"host-q"});startTimer(true);}
+        else{setState({screen:"play-q",selectedAnswers:[],answered:false});startTimer(false);}
+      });
     }else if(g.status==="results"&&prev?.status!=="results"){
-      stopTimer();setState({screen:S.role==="host"?"host-r":"play-w"});
+      stopTimer();stopCountdown();setState({screen:S.role==="host"?"host-r":"play-w"});
     }else if(g.status==="final"&&prev?.status!=="final"){
-      stopTimer();setState({screen:S.role==="host"?"host-f":"play-f"});
+      stopTimer();stopCountdown();setState({screen:S.role==="host"?"host-f":"play-f"});
       if(S.role==="host")saveGameHistory();
     }
     // Don't re-render during questions — timer handles its own updates
@@ -410,6 +458,7 @@ function stopListening(){
   if(gameRef){gameRef.off();gameRef=null;}
   if(playersRef){playersRef.off();playersRef=null;}
   stopTimer();
+  stopCountdown();
 }
 
 // ============ TIMER ============
@@ -432,6 +481,42 @@ function startTimer(isHost){
   },1000);
 }
 function stopTimer(){if(timerInterval){clearInterval(timerInterval);timerInterval=null;}}
+
+// ============ COUNTDOWN 3-2-1 ============
+let countdownCallback = null;
+let countdownInterval = null;
+function stopCountdown(){if(countdownInterval){clearInterval(countdownInterval);countdownInterval=null;}countdownCallback=null;}
+function showCountdown(callback){
+  stopCountdown();
+  countdownCallback = callback;
+  setState({screen:"countdown"});
+  let count = 3;
+  const root = document.getElementById("app");
+  function renderCount(){
+    const colors = ["#4ade80","#fbbf24","#f87171"];
+    const c = colors[3-count] || "#4ade80";
+    const text = count > 0 ? count : "GO !";
+    const size = count > 0 ? "6rem" : "4rem";
+    root.className = "app";
+    root.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center">
+      <div style="font-size:${size};font-weight:900;color:${c};font-family:'Outfit',sans-serif;
+        text-shadow:0 0 60px ${c}44,0 0 120px ${c}22;
+        animation:countPop .5s ease both">${text}</div>
+      ${S.gs?`<p style="color:var(--muted);font-size:13px;margin-top:20px">Question ${S.gs.currentQ+1}/${S.gs.totalQ}</p>`:""}
+    </div>
+    <style>@keyframes countPop{0%{transform:scale(2.5);opacity:0}40%{transform:scale(.9);opacity:1}100%{transform:scale(1);opacity:1}}</style>`;
+  }
+  renderCount();
+  countdownInterval = setInterval(()=>{
+    count--;
+    if(count < 0){
+      stopCountdown();
+      if(callback) callback();
+    } else {
+      renderCount();
+    }
+  }, 800);
+}
 function updateTimerDOM(){
   const bar = document.getElementById("timer-fill");
   const num = document.getElementById("timer-num");
@@ -462,6 +547,7 @@ async function doStart(){
 
 // Admin: force skip to results (end timer early)
 async function doSkipQuestion(){
+  if(isProcessingTimerEnd) return;
   stopTimer();
   await doTimerEnd();
 }
@@ -470,6 +556,7 @@ async function doSkipQuestion(){
 async function doQuitGame(){
   if(!confirm("Quitter la partie en cours ?")) return;
   stopTimer();
+  stopCountdown();
   stopListening();
   // Set game to final so players see results
   try{ await db.ref("games/"+S.gameCode+"/state").update({status:"final"}); }catch(e){}
@@ -480,6 +567,7 @@ async function doQuitGame(){
 async function doRestartQuiz(){
   if(!confirm("Recommencer le quiz depuis le début ?")) return;
   stopTimer();
+  stopCountdown();
   // Reset all player scores
   const plSnap = await db.ref("games/"+S.gameCode+"/players").once("value");
   const raw = plSnap.val()||{};
@@ -510,7 +598,10 @@ async function checkAllAnswered(){
   }catch(e){}
 }
 async function doTimerEnd(){
-  const g=S.gs;if(!g)return;
+  if(isProcessingTimerEnd) return;
+  isProcessingTimerEnd = true;
+  try{
+  const g=S.gs;if(!g){isProcessingTimerEnd=false;return;}
   const snap=await db.ref("games/"+S.gameCode+"/answers/"+g.currentQ).once("value");
   const answers=Object.values(snap.val()||{});
   const dur=g.timerSeconds||DEFAULT_TIMER;
@@ -534,6 +625,8 @@ async function doTimerEnd(){
   }
   await db.ref("games/"+S.gameCode+"/players").set(raw);
   await db.ref("games/"+S.gameCode+"/state").update({status:"results"});
+  }catch(e){console.error("doTimerEnd error:",e);}
+  finally{isProcessingTimerEnd=false;}
 }
 async function doNext(){
   const next=S.gs.currentQ+1;
@@ -563,12 +656,48 @@ function doToggle(idx){
   if(S.answered)return;
   const q=S.gs.questions[S.gs.currentQ];
   if(q.type==="multi"){
-    const sel=S.selectedAnswers.includes(idx)?S.selectedAnswers.filter(i=>i!==idx):[...S.selectedAnswers,idx];
-    setState({selectedAnswers:sel});
-  }else{setState({selectedAnswers:[idx]});doSubmit([idx]);}
+    if(S.selectedAnswers.includes(idx)) S.selectedAnswers=S.selectedAnswers.filter(i=>i!==idx);
+    else S.selectedAnswers=[...S.selectedAnswers, idx];
+    // Update DOM directly instead of full re-render (avoids timer jump)
+    document.querySelectorAll("[data-ans]").forEach(el=>{
+      const i=+el.dataset.ans;
+      const isSel=S.selectedAnswers.includes(i);
+      el.classList.toggle("selected",isSel);
+      el.classList.remove("faded");
+    });
+    const vb=document.getElementById("btn-val");
+    if(vb){
+      vb.disabled=!S.selectedAnswers.length;
+      vb.textContent="Valider ("+S.selectedAnswers.length+")";
+    }
+  }else{
+    S.selectedAnswers=[idx];
+    doSubmit([idx]);
+    // doSubmit calls setState({answered:true}) which triggers render with correct state
+  }
 }
 async function doSubmit(choices){
-  if(S.answered)return;setState({answered:true});
+  if(S.answered)return;
+  S.answered=true;
+  // Update DOM directly to show "Envoyé" without re-rendering (avoids timer jump)
+  document.querySelectorAll("[data-ans]").forEach(el=>{
+    const i=+el.dataset.ans;
+    const isSel=choices.includes(i);
+    el.classList.toggle("selected",isSel);
+    el.classList.toggle("faded",!isSel);
+    el.disabled=true;
+    el.style.pointerEvents="none";
+  });
+  const valBtn=document.getElementById("btn-val");
+  if(valBtn) valBtn.style.display="none";
+  // Add "Envoyé" message
+  const answersDiv=document.querySelector(".answers");
+  if(answersDiv){
+    const msg=document.createElement("p");
+    msg.style.cssText="color:var(--green);margin-top:14px;font-weight:700;font-size:14px;text-align:center;width:100%;grid-column:1/-1";
+    msg.textContent="✓ Envoyé !";
+    answersDiv.parentElement.appendChild(msg);
+  }
   await db.ref("games/"+S.gameCode+"/answers/"+S.gs.currentQ).push({name:S.playerName,choices,timeLeft:currentTimer});
 }
 
@@ -581,57 +710,381 @@ function eQ(qi,f,v){
   render();
 }
 
+// ============ SOLO MODE ============
+async function loadSoloBanks(){
+  try{
+    const snap = await db.ref("banks").once("value");
+    const raw = snap.val()||{};
+    const banks = Object.entries(raw).map(([id,b])=>({id,...b, category:b.category||"📚 Autre"}));
+    banks.sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+    setState({banks, screen:"solo-pick", error:""});
+  }catch(e){
+    setState({error:"Erreur de connexion. Vérifie ta connexion internet."});
+  }
+}
+
+function startSolo(bankId){
+  const bank = S.banks.find(b=>b.id===bankId);
+  if(!bank||!bank.questions?.length){ setState({error:"Pas de questions !"}); return; }
+  const rawQs = bank.questions.filter(q=>q.q.trim()&&q.options.every(o=>o.trim()));
+  if(!rawQs.length){ setState({error:"Pas de questions valides !"}); return; }
+  const qs = shuffleQuiz(rawQs);
+  const timerSec = bank.timerSeconds || DEFAULT_TIMER;
+  S.solo = {questions:qs, currentQ:0, score:0, results:[], bankName:bank.name, bankId:bankId, timerSec};
+  S.soloSel = []; S.soloAnswered = false;
+  showSoloCountdown(()=>{
+    setState({screen:"solo-q", soloSel:[], soloAnswered:false, error:""});
+    startSoloTimer();
+  });
+}
+
+let soloTimerInterval = null, soloTimer = 20;
+function startSoloTimer(){
+  stopSoloTimer();
+  soloTimer = S.solo?.timerSec || DEFAULT_TIMER;
+  soloTimerInterval = setInterval(()=>{
+    soloTimer--;
+    // Update timer DOM
+    const circle = document.getElementById("timer-circle");
+    const circleNum = document.getElementById("timer-circle-num");
+    const dur = S.solo?.timerSec || DEFAULT_TIMER;
+    const c = soloTimer<=3?"#f87171":soloTimer<=7?"#fbbf24":"#4ade80";
+    const glow = soloTimer<=3?"rgba(248,113,113,.3)":soloTimer<=7?"rgba(251,191,36,.2)":"rgba(74,222,128,.2)";
+    if(circle){
+      const circ = 2*Math.PI*54;
+      circle.style.strokeDashoffset = circ*(1-soloTimer/dur);
+      circle.style.stroke = c;
+      circle.parentElement.style.filter = "drop-shadow(0 0 20px "+glow+")";
+    }
+    if(circleNum){circleNum.textContent=soloTimer;circleNum.style.fill=c;}
+    if(soloTimer<=0){
+      stopSoloTimer();
+      if(!S.soloAnswered) soloSubmit(S.soloSel);
+    }
+  },1000);
+}
+function stopSoloTimer(){if(soloTimerInterval){clearInterval(soloTimerInterval);soloTimerInterval=null;}}
+
+function soloToggle(idx){
+  if(S.soloAnswered) return;
+  const q = S.solo.questions[S.solo.currentQ];
+  if(q.type==="multi"){
+    const sel = S.soloSel.includes(idx) ? S.soloSel.filter(i=>i!==idx) : [...S.soloSel, idx];
+    S.soloSel = sel;
+    // Update DOM
+    document.querySelectorAll("[data-ans]").forEach(el=>{
+      el.classList.toggle("selected", sel.includes(+el.dataset.ans));
+    });
+    const vb = document.getElementById("btn-solo-val");
+    if(vb){vb.disabled=!sel.length;vb.textContent="Valider ("+sel.length+")";}
+  } else {
+    S.soloSel = [idx];
+    soloSubmit([idx]);
+  }
+}
+
+function soloSubmit(choices){
+  if(S.soloAnswered) return;
+  S.soloAnswered = true;
+  stopSoloTimer();
+  const q = S.solo.questions[S.solo.currentQ];
+  const cSet = new Set(q.answers);
+  const chosen = new Set(choices);
+  const isM = q.type==="multi";
+  
+  let status = "wrong", points = 0;
+  if(isM){
+    const allOk = [...cSet].every(c=>chosen.has(c));
+    const noWrong = [...chosen].every(c=>cSet.has(c));
+    if(allOk && noWrong){ status="correct"; points=1000+Math.round((soloTimer/(S.solo.timerSec||20))*500); }
+    else {
+      const partial = [...chosen].filter(c=>cSet.has(c)).length;
+      if(partial>0){ status="partial"; points=Math.round((partial/cSet.size)*500); }
+    }
+  } else {
+    if(cSet.has(choices[0])){ status="correct"; points=1000+Math.round((soloTimer/(S.solo.timerSec||20))*500); }
+  }
+  
+  S.solo.score += points;
+  S.solo.results.push({q:q.q, choices, status, points, correct:q.answers, options:q.options, type:q.type});
+  
+  setState({screen:"solo-result", soloAnswered:true});
+}
+
+function soloNext(){
+  const next = S.solo.currentQ + 1;
+  if(next >= S.solo.questions.length){
+    setState({screen:"solo-final"});
+  } else {
+    S.solo.currentQ = next;
+    showSoloCountdown(()=>{
+      setState({screen:"solo-q", soloSel:[], soloAnswered:false});
+      startSoloTimer();
+    });
+  }
+}
+
+function showSoloCountdown(callback){
+  stopSoloTimer();
+  setState({screen:"countdown"});
+  let count = 3;
+  const root = document.getElementById("app");
+  function renderCount(){
+    const colors = ["#4ade80","#fbbf24","#f87171"];
+    const c = colors[3-count] || "#4ade80";
+    const text = count > 0 ? count : "GO !";
+    const size = count > 0 ? "6rem" : "4rem";
+    root.className = "app";
+    root.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center">
+      <div style="font-size:${size};font-weight:900;color:${c};font-family:'Outfit',sans-serif;
+        text-shadow:0 0 60px ${c}44,0 0 120px ${c}22;
+        animation:countPop .5s ease both">${text}</div>
+      ${S.solo?`<p style="color:var(--muted);font-size:13px;margin-top:20px">Question ${S.solo.currentQ+1}/${S.solo.questions.length}</p>`:""}
+    </div>`;
+  }
+  renderCount();
+  const iv = setInterval(()=>{
+    count--;
+    if(count < 0){
+      clearInterval(iv);
+      if(callback) callback();
+    } else {
+      renderCount();
+    }
+  }, 800);
+}
+
+function soloTimerHTML(){
+  const dur = S.solo?.timerSec || DEFAULT_TIMER;
+  const circ = 2*Math.PI*54;
+  const offset = circ*(1-soloTimer/dur);
+  const c = soloTimer<=3?"#f87171":soloTimer<=7?"#fbbf24":"#4ade80";
+  const glow = soloTimer<=3?"rgba(248,113,113,.3)":soloTimer<=7?"rgba(251,191,36,.2)":"rgba(74,222,128,.2)";
+  return '<svg width="130" height="130" viewBox="0 0 120 120" style="margin:0 auto;display:block;filter:drop-shadow(0 0 20px '+glow+')"><circle cx="60" cy="60" r="54" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="7"/><circle id="timer-circle" cx="60" cy="60" r="54" fill="none" stroke="'+c+'" stroke-width="7" stroke-dasharray="'+circ+'" stroke-dashoffset="'+offset+'" stroke-linecap="round" transform="rotate(-90 60 60)" style="transition:stroke-dashoffset 1s linear,stroke .5s"/><text id="timer-circle-num" x="60" y="68" text-anchor="middle" fill="'+c+'" font-size="34" font-weight="900" font-family="Outfit,sans-serif">'+soloTimer+'</text></svg>';
+}
+
+function soloRedoMistakes(){
+  if(!S.solo) return;
+  const wrongResults = S.solo.results.filter(r=>r.status!=="correct");
+  if(!wrongResults.length) return;
+  const qs = wrongResults.map(r=>({q:r.q, type:r.type, options:r.options, answers:r.correct}));
+  const shuffled = shuffleQuiz(qs);
+  const origBankId = S.solo.bankId;
+  S.solo = {questions:shuffled, currentQ:0, score:0, results:[], bankName:S.solo.bankName.replace(/ \(erreurs\)$/,"")+" (erreurs)", bankId:origBankId, timerSec:S.solo.timerSec};
+  S.soloSel = []; S.soloAnswered = false;
+  showSoloCountdown(()=>{
+    setState({screen:"solo-q", soloSel:[], soloAnswered:false, error:""});
+    startSoloTimer();
+  });
+}
+
+
 // ============ IMPORT PARSER ============
 function parseImportText(text){
+  // Normalize line endings
+  text = text.replace(/\r\n/g,"\n").replace(/\r/g,"\n");
+  const lines = text.split("\n");
+  
+  // Step 1: Identify question start lines
+  function isQuestionStart(line, prevLine){
+    let trimmed = line.trim();
+    if(!trimmed) return false;
+    // Strip leading markdown bold ** or __
+    trimmed = trimmed.replace(/^\*{1,2}\s*/, "").replace(/^_{1,2}\s*/, "");
+    // Strip leading ### markdown headers
+    trimmed = trimmed.replace(/^#{1,4}\s*/, "");
+    // Skip meta-lines that should never be questions
+    if(/^(explication|note|réponse|answer|explanation|correct|source|astuce|rappel|nb|remarque)\s*[:—\-]/i.test(trimmed)) return false;
+    // Numbered: "1.", "1)", "1 -", "1:", "1 " followed by text
+    if(/^\d+\s*[).\-:]\s*\S/.test(trimmed)) return true;
+    if(/^\d+\s+[A-ZÀ-ÖÙ-Ü]/u.test(trimmed)) return true;  // "1 Quelle..."
+    // Q1:, Q1., Q1), Question 1
+    if(/^Q(uestion)?\s*\d+\s*[).\-:]/i.test(trimmed)) return true;
+    if(/^Q(uestion)?\s*\d+\s*$/i.test(trimmed)) return true;  // "Question 1" alone
+    if(/^Q(uestion)?\s*[).\-:]/i.test(trimmed)) return true;  // "Q:", "Question-"
+    // After blank line AND line doesn't look like an answer
+    if(prevLine !== undefined && prevLine.trim() === ""){
+      if(!/^[a-f]\s*[.)]/i.test(trimmed) && !/^[-•*✓✅☑\[]/.test(trimmed)){
+        // Also skip meta-lines after blank lines
+        if(!/^(explication|note|réponse|answer|explanation|correct|source|astuce|rappel|nb|remarque)\s*[:—\-]/i.test(trimmed)){
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  
+  function isAnswerLine(line){
+    let t = line.trim();
+    if(!t) return false;
+    // Strip leading DOUBLE bold only (** but not single *)
+    t = t.replace(/^\*\*\s*/, "");
+    // a), A., b), B. etc
+    if(/^[a-f]\s*[.)]/i.test(t)) return true;
+    // - or • bullet
+    if(/^[-•]/.test(t)) return true;
+    // * as correct answer marker (single star)
+    if(/^\*\s*\S/.test(t)) return true;
+    // Correct markers
+    if(/^[✓✅☑]/.test(t)) return true;
+    if(/^\[[ x]\]/i.test(t)) return true;
+    return false;
+  }
+  
+  function isMetaLine(line){
+    const t = line.trim().replace(/^\*{1,2}/, "").trim();
+    if(/^(explication|note|réponse|answer|explanation|correct|source|astuce|rappel|nb|remarque)\s*[:—\-]/i.test(t)) return true;
+    if(/^(réponse|answer)\s*(correcte|correct)?\s*[:—\-]/i.test(t)) return true;
+    return false;
+  }
+  
+  // Step 2: Split into blocks (each block = 1 question + its answers)
+  const blocks = [];
+  let currentBlock = [];
+  let lastLineWasBlank = true;
+  
+  for(let i = 0; i < lines.length; i++){
+    const line = lines[i];
+    const trimmed = line.trim();
+    const prevLine = i > 0 ? lines[i-1] : "";
+    
+    if(trimmed === ""){
+      lastLineWasBlank = true;
+      continue;
+    }
+    
+    // Skip meta-lines (explanations, notes, etc.) at any position
+    if(isMetaLine(trimmed)){
+      lastLineWasBlank = false;
+      continue;
+    }
+    
+    // Check if this line starts a new question
+    if(isQuestionStart(line, lastLineWasBlank ? "" : undefined)){
+      // If we have a current block with at least a question + answers, save it
+      if(currentBlock.length >= 2){
+        blocks.push([...currentBlock]);
+      } else if(currentBlock.length === 1 && blocks.length > 0){
+        // Single line that was thought to be a question but has no answers
+        // Might be continuation of previous question — skip or append
+      }
+      currentBlock = [trimmed];
+    } else if(isAnswerLine(line) && currentBlock.length >= 1){
+      currentBlock.push(trimmed);
+    } else if(currentBlock.length >= 1 && !lastLineWasBlank){
+      // Continuation of the current question text (multi-line question)
+      if(currentBlock.length === 1){
+        // Append to question text
+        currentBlock[0] += " " + trimmed;
+      } else {
+        // Probably a new answer or continuation
+        currentBlock.push(trimmed);
+      }
+    } else if(lastLineWasBlank && trimmed){
+      // After blank line — new question
+      if(currentBlock.length >= 2){
+        blocks.push([...currentBlock]);
+      }
+      currentBlock = [trimmed];
+    } else {
+      currentBlock.push(trimmed);
+    }
+    
+    lastLineWasBlank = false;
+  }
+  // Don't forget the last block
+  if(currentBlock.length >= 2){
+    blocks.push(currentBlock);
+  }
+  
+  // Step 3: Parse each block into a question object
   const questions = [];
-  // Split by blank lines (double newline)
-  const blocks = text.split(/\n\s*\n/).map(b=>b.trim()).filter(b=>b);
   for(const block of blocks){
-    const lines = block.split("\n").map(l=>l.trim()).filter(l=>l);
-    if(lines.length < 2) continue;
-    // First line = question
-    let qText = lines[0];
-    // Remove leading numbering like "1.", "1)", "Q:", "Q1:", etc.
-    qText = qText.replace(/^(Q\d*[\s:.\-)]*|\d+[\s:.\-)]+)/i, "").trim();
+    let qText = block[0];
+    // Strip markdown formatting first
+    qText = qText.replace(/^\*{1,2}\s*/, "").replace(/\*{1,2}\s*$/, ""); // **bold**
+    qText = qText.replace(/^_{1,2}\s*/, "").replace(/_{1,2}\s*$/, ""); // __bold__
+    qText = qText.replace(/^#{1,4}\s*/, ""); // ### headers
+    // Clean numbering prefixes (only if content follows)
+    const origQ = qText;
+    qText = qText.replace(/^\d+\s*[).\-:]\s*/, "");  // "1. ", "1) ", "1: "
+    qText = qText.replace(/^\d+\s+(?=[A-ZÀ-ÖÙ-Üa-zà-öù-ü])/u, "");  // "1 Quelle" → "Quelle"
+    qText = qText.replace(/^Q(uestion)?\s*\d+\s*[).\-:]\s*/i, "");  // "Q1. ", "Question 3: "
+    qText = qText.replace(/^Q(uestion)?\s*\d*\s*[).\-:]\s*/i, "");  // "Q: ", "Question: "
+    // Don't strip "Question X" if it would leave nothing (it IS the question text)
+    if(qText.trim()) {
+      // Additional cleanup only if we still have text
+    } else {
+      qText = origQ; // restore original if cleaning emptied it
+    }
+    // Clean remaining bold markers in the middle
+    qText = qText.replace(/\*{1,2}/g, "");
+    qText = qText.trim();
+    if(!qText) continue;
+    
     const options = [];
     const answers = [];
-    for(let i=1; i<lines.length; i++){
-      let line = lines[i];
+    
+    for(let i = 1; i < block.length; i++){
+      let line = block[i];
       let isCorrect = false;
-      // Check for correct answer markers: *, ✓, (correct), [x], ✅
-      if(line.match(/^\s*\*/)){
+      
+      // Skip meta-lines inside blocks too
+      if(isMetaLine(line)) continue;
+      
+      // Detect correct answer markers (check BEFORE cleaning)
+      // Strip prefix first to check for * after "a) " etc
+      const lineAfterPrefix = line.replace(/^\s*[a-f]\s*[.)]\s*/i,"").replace(/^\s*\d+\s*[.)]\s*/,"").replace(/^\s*[-•–—]\s*/,"");
+      if(/^\s*\*\s*[^*]/.test(lineAfterPrefix) || /^\s*\*\*\s*[^*]/.test(lineAfterPrefix)){
         isCorrect = true;
-        line = line.replace(/^\s*\*\s*/, "");
-      } else if(line.match(/^\s*✓/)){
-        isCorrect = true;
-        line = line.replace(/^\s*✓\s*/, "");
-      } else if(line.match(/^\s*✅/)){
-        isCorrect = true;
-        line = line.replace(/^\s*✅\s*/, "");
-      } else if(line.match(/\(correct\)\s*$/i)){
-        isCorrect = true;
-        line = line.replace(/\s*\(correct\)\s*$/i, "");
-      } else if(line.match(/^\s*\[x\]/i)){
-        isCorrect = true;
-        line = line.replace(/^\s*\[x\]\s*/i, "");
       }
-      // Remove leading markers like "- ", "a) ", "A. ", etc.
-      line = line.replace(/^[\s]*[-•]\s*/, "");
-      line = line.replace(/^[a-fA-F]\s*[.)]\s*/, "");
+      if(/^\s*\*\s*[^*]/.test(line) || /^\s*\*\*\s*[^*]/.test(line)){
+        isCorrect = true;
+      }
+      if(/✓/.test(line) || /✅/.test(line) || /☑/.test(line)){
+        isCorrect = true;
+      }
+      if(/^\s*\[x\]/i.test(line)){
+        isCorrect = true;
+      }
+      if(/\(correct[e]?\)/i.test(line) || /\(bonne\s*r[ée]ponse\)/i.test(line)){
+        isCorrect = true;
+      }
+      
+      // Clean the line
+      line = line.replace(/^\s*[a-f]\s*[.)]\s*/i, ""); // remove letter prefix first
+      line = line.replace(/^\s*\d+\s*[.)]\s*/, ""); // remove number prefix
+      line = line.replace(/^\s*[-•–—]\s*/, ""); // remove dash prefix
+      line = line.replace(/^\s*\*{1,2}\s*/, ""); // leading * or **
+      line = line.replace(/\*{1,2}\s*$/, ""); // trailing **
+      line = line.replace(/^\s*[✓✅☑]\s*/, "");
+      line = line.replace(/^\s*\[[ x]\]\s*/i, "");
+      line = line.replace(/\s*\(correct[e]?\)\s*/i, "");
+      line = line.replace(/\s*\(bonne\s*r[ée]ponse\)\s*/i, "");
+      line = line.replace(/\s*[✓✅]\s*$/, "");
+      line = line.replace(/\s+\*\s*$/, "");
+      // Clean any remaining bold markers
+      line = line.replace(/\*{1,2}/g, "");
+      line = line.replace(/_{1,2}/g, "");
       line = line.trim();
+      
       if(!line) continue;
+      if(line.length > 200) continue;
+      
       if(isCorrect) answers.push(options.length);
       options.push(line);
     }
+    
     if(options.length < 2) continue;
+    
     // Determine type
     let type = "single";
     const isVF = options.length === 2 && 
-      ((options[0].toLowerCase()==="vrai" && options[1].toLowerCase()==="faux") ||
-       (options[0].toLowerCase()==="true" && options[1].toLowerCase()==="false"));
+      ((options[0].match(/^vrai$/i) && options[1].match(/^faux$/i)) ||
+       (options[0].match(/^true$/i) && options[1].match(/^false$/i)));
     if(isVF) type = "vf";
     else if(answers.length > 1) type = "multi";
-    // If no answers marked, default first one
+    
     if(answers.length === 0) answers.push(0);
     questions.push({ q: qText, type, options, answers });
   }
@@ -652,8 +1105,10 @@ function doImport(){
 
 function doReset(){
   stopListening();
+  stopSoloTimer();
+  stopCountdown();
   const defaultScreen = isAdmin() ? "admin-login" : "player-join";
-  setState({screen:defaultScreen,gs:null,players:[],gameCode:"",error:"",answered:false,selectedAnswers:[],role:null,msg:"",detailData:null,detailTab:"questions",adminPw:""});
+  setState({screen:defaultScreen,gs:null,players:[],gameCode:"",error:"",answered:false,selectedAnswers:[],role:null,msg:"",detailData:null,detailTab:"questions",adminPw:"",categoryFilter:"all",importText:"",solo:null,soloSel:[],soloAnswered:false});
 }
 function doBackToDash(){
   stopListening();
@@ -751,6 +1206,18 @@ function boardHTML(hl){
     return `<div class="${cls}" style="animation-delay:${i*0.06}s"><div style="display:flex;align-items:center"><span style="font-size:17px;width:28px;text-align:center;flex-shrink:0">${m}</span><span style="color:#fff;font-weight:600;font-size:14px;margin-left:10px">${esc(p.name)}</span>${ck}</div><span class="mono" style="color:var(--amber);font-weight:800">${p.score}</span></div>`;
   }).join("");
 }
+function bankItemHTML(b){
+  const n=b.questions?.length||0;
+  return `<div class="bank-item">
+    <div><div class="bank-name">${esc(b.name)}</div><div class="bank-count">${n} question${n!==1?"s":""}</div></div>
+    <div class="bank-actions">
+      <button data-edit="${b.id}">✏️</button>
+      <button data-play="${b.id}" style="background:var(--purple-soft);color:var(--purple)">▶️</button>
+      <button data-dup="${b.id}">📋</button>
+      <button class="del" data-del="${b.id}">🗑</button>
+    </div>
+  </div>`;
+}
 function answerGrid(q, clickable, showSelected){
   return q.options.map((opt,i)=>{
     const base=q.options.length<=2?`vf${i}`:COLORS[i%COLORS.length];
@@ -766,6 +1233,8 @@ function answerGrid(q, clickable, showSelected){
 // ============ MAIN RENDER ============
 function render(){
   const root=document.getElementById("app");
+  // Don't re-render during countdown animation
+  if(S.screen==="countdown") return;
   root.innerHTML="";
 
   // CONFIG
@@ -787,11 +1256,10 @@ function render(){
     return;
   }
 
-  // HOME — redirect based on role
+  // HOME — redirect based on role (without double-render)
   if(S.screen==="home"){
-    if(isAdmin()) setState({screen:"admin-login",error:"",adminPw:""});
-    else setState({screen:"player-join",error:""});
-    return;
+    S.screen = isAdmin() ? "admin-login" : "player-join";
+    // Fall through to the correct screen below
   }
 
   // ADMIN LOGIN
@@ -816,31 +1284,65 @@ function render(){
   // ADMIN DASHBOARD
   if(S.screen==="admin-dash"){
     root.className="scroll-page";
-    const banksHTML=S.banks.length?S.banks.map(b=>{
-      const n=b.questions?.length||0;
-      return `<div class="bank-item">
-        <div><div class="bank-name">${esc(b.name)}</div><div class="bank-count">${n} question${n!==1?"s":""}</div></div>
-        <div class="bank-actions">
-          <button data-edit="${b.id}">✏️</button>
-          <button data-play="${b.id}" style="background:var(--purple-soft);color:var(--purple)">▶️</button>
-          <button data-dup="${b.id}">📋</button>
-          <button class="del" data-del="${b.id}">🗑</button>
-        </div>
-      </div>`;
-    }).join(""):`<div class="center" style="padding:40px 0"><p style="color:var(--muted);font-size:14px">Aucun quiz pour l'instant</p></div>`;
+    const cats = getCategories();
+    const filter = S.categoryFilter || "all";
+    const filtered = filter === "all" ? S.banks : S.banks.filter(b => b.category === filter);
+
+    // Category tabs
+    const tabsHTML = `<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:16px;scrollbar-width:none;-webkit-overflow-scrolling:touch">
+      <button class="cat-tab ${filter==="all"?"active":""}" data-cat="all">Tout (${S.banks.length})</button>
+      ${cats.map(c=>{
+        const count = S.banks.filter(b=>b.category===c).length;
+        return count ? `<button class="cat-tab ${filter===c?"active":""}" data-cat="${esc(c)}">${esc(c)} (${count})</button>` : "";
+      }).join("")}
+    </div>`;
+
+    // Banks grouped
+    let banksHTML = "";
+    if(filtered.length){
+      if(filter === "all"){
+        // Group by category
+        const grouped = {};
+        filtered.forEach(b=>{ const c=b.category||"📚 Autre"; if(!grouped[c])grouped[c]=[]; grouped[c].push(b); });
+        for(const [cat, bks] of Object.entries(grouped).sort((a,b)=>a[0].localeCompare(b[0]))){
+          banksHTML += `<div style="margin-bottom:20px">
+            <p style="color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;padding-left:4px">${esc(cat)} — ${bks.length} quiz</p>
+            ${bks.map(b=>bankItemHTML(b)).join("")}
+          </div>`;
+        }
+      } else {
+        banksHTML = filtered.map(b=>bankItemHTML(b)).join("");
+      }
+    } else {
+      banksHTML = `<div class="center" style="padding:40px 0"><p style="color:var(--muted);font-size:14px">Aucun quiz dans cette catégorie</p></div>`;
+    }
 
     root.innerHTML=`
-      <div class="sticky-head row">
-        <button class="btn-ghost" id="btn-logout">← Déconnexion</button>
-        <h2 class="title" style="font-size:1.3rem">📚 Mes <span>Quiz</span></h2>
-        <div></div>
+      <div class="sticky-head">
+        <div class="row mb-8">
+          <button class="btn-ghost" id="btn-logout">← Déconnexion</button>
+          <h2 class="title" style="font-size:1.3rem">📚 Mes <span>Quiz</span></h2>
+          <div></div>
+        </div>
+        ${tabsHTML}
       </div>
-      <div class="mb-16">${banksHTML}</div>
-      <button class="btn btn-purple" id="btn-newbank" style="max-width:300px;margin:0 auto">+ Nouveau quiz</button>
+      ${banksHTML}
+      <div style="display:flex;gap:8px;max-width:400px;margin:8px auto 0">
+        <button class="btn btn-purple" id="btn-newbank" style="flex:2">+ Nouveau quiz</button>
+        <button class="btn btn-outline" id="btn-newcat" style="flex:1;font-size:.85rem">+ Catégorie</button>
+      </div>
       ${S.error?`<p class="err mt-12">${esc(S.error)}</p>`:""}
     `;
     document.getElementById("btn-logout").onclick=doReset;
-    document.getElementById("btn-newbank").onclick=createBank;
+    document.getElementById("btn-newbank").onclick=()=>createBank();
+    document.getElementById("btn-newcat").onclick=()=>{
+      const name = prompt("Nom de la nouvelle catégorie (avec emoji) :", "📖 ");
+      if(name && name.trim()){
+        // Just create a bank in that category
+        createBank(name.trim());
+      }
+    };
+    root.querySelectorAll(".cat-tab").forEach(el=>el.onclick=()=>setState({categoryFilter:el.dataset.cat}));
     root.querySelectorAll("[data-edit]").forEach(el=>el.onclick=()=>openBankEditor(el.dataset.edit));
     root.querySelectorAll("[data-play]").forEach(el=>el.onclick=()=>launchGame(el.dataset.play));
     root.querySelectorAll("[data-dup]").forEach(el=>el.onclick=()=>duplicateBank(el.dataset.dup));
@@ -880,6 +1382,8 @@ function render(){
     }).join("");
 
     const bankTimer = S.currentBank.timerSeconds || DEFAULT_TIMER;
+    const bankCat = S.currentBank.category || "📚 Autre";
+    const allCats = getCategories();
 
     root.innerHTML=`
       <div class="sticky-head">
@@ -890,13 +1394,17 @@ function render(){
         </div>
         ${S.msg?`<p class="ok mt-4">${esc(S.msg)}</p>`:""}
       </div>
-      <div class="card mb-16" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:1.2rem">⏱</span>
-          <span style="font-weight:700;font-size:14px">Timer par question</span>
+      <div style="display:flex;gap:10px;margin-bottom:16px">
+        <div class="card" style="flex:1;display:flex;align-items:center;justify-content:space-between;padding:12px 14px">
+          <span style="font-size:1rem">📁</span>
+          <select id="sel-cat" style="background:var(--subtle);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;font-weight:600;flex:1;margin-left:8px">
+            ${allCats.map(c=>`<option value="${esc(c)}" ${bankCat===c?"selected":""}>${esc(c)}</option>`).join("")}
+            <option value="__new__">+ Nouvelle...</option>
+          </select>
         </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <select id="sel-timer" style="background:var(--subtle);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;text-align:center">
+        <div class="card" style="flex:1;display:flex;align-items:center;justify-content:space-between;padding:12px 14px">
+          <span style="font-size:1rem">⏱</span>
+          <select id="sel-timer" style="background:var(--subtle);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;flex:1;margin-left:8px;text-align:center">
             <option value="10" ${bankTimer===10?"selected":""}>10s</option>
             <option value="15" ${bankTimer===15?"selected":""}>15s</option>
             <option value="20" ${bankTimer===20?"selected":""}>20s</option>
@@ -920,6 +1428,14 @@ function render(){
     document.getElementById("btn-save").onclick=saveBankQuestions;
     document.getElementById("btn-playedit").onclick=async()=>{await saveBankQuestions();launchGame(S.currentBank.id);};
     document.getElementById("inp-bankname").onchange=e=>saveBankName(e.target.value);
+    document.getElementById("sel-cat").onchange=e=>{
+      let v = e.target.value;
+      if(v === "__new__"){
+        const name = prompt("Nom de la nouvelle catégorie (avec emoji) :", "📖 ");
+        if(name && name.trim()){ v = name.trim(); } else { e.target.value = bankCat; return; }
+      }
+      saveBankCategory(v);
+    };
     document.getElementById("sel-timer").onchange=e=>{
       const v=parseInt(e.target.value);
       S.currentBank.timerSeconds=v;
@@ -939,21 +1455,21 @@ function render(){
   // ADMIN IMPORT
   if(S.screen==="admin-import"){
     root.className="scroll-page";
-    const example = `Comment s'appelle le chef d'agrès ?
-*Le sergent
-Le caporal
-Le lieutenant
-Le capitaine
+    const example = `1. Comment s'appelle le chef d'agrès ?
+a) *Le sergent
+b) Le caporal
+c) Le lieutenant
+d) Le capitaine
 
-La PEP permet d'éviter le collapsus ?
-*Vrai
-Faux
+2. La PEP permet d'éviter le collapsus ?
+a) *Vrai
+b) Faux
 
-Quels paramètres vérifier en VSAi ?
-*VT
-*FR
-Pplateau
-*Saturation O2`;
+3. Quels paramètres vérifier en VSAi ?
+a) *VT
+b) *FR
+c) Pplateau
+d) *Saturation O2`;
 
     root.innerHTML=`
       <div class="sticky-head row">
@@ -963,23 +1479,35 @@ Pplateau
       </div>
 
       <div class="card mb-16" style="padding:16px">
-        <p style="font-weight:700;font-size:14px;margin-bottom:8px">📖 Format à utiliser :</p>
-        <div style="font-size:12px;color:#94a3b8;line-height:1.7">
-          <p style="margin-bottom:6px">Chaque bloc = une question. Ligne vide entre chaque question.</p>
-          <p style="margin-bottom:6px"><span style="color:var(--green);font-weight:700">*</span> devant une réponse = bonne réponse</p>
-          <p style="margin-bottom:6px">Plusieurs <span style="color:var(--green);font-weight:700">*</span> = multi-réponses</p>
-          <p>Vrai/Faux est détecté automatiquement</p>
+        <p style="font-weight:700;font-size:14px;margin-bottom:10px">📖 Formats acceptés :</p>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.8">
+          <p style="margin-bottom:4px">✅ Questions numérotées : <code style="color:var(--amber)">1. Question</code></p>
+          <p style="margin-bottom:4px">✅ Réponses avec lettres : <code style="color:var(--amber)">a) Réponse</code></p>
+          <p style="margin-bottom:4px">✅ Réponses avec tirets : <code style="color:var(--amber)">- Réponse</code></p>
+          <p style="margin-bottom:4px">✅ Bonne réponse avec <span style="color:var(--green);font-weight:700">*</span> : <code style="color:var(--green)">*Bonne réponse</code> ou <code style="color:var(--green)">a) *Réponse</code></p>
+          <p style="margin-bottom:4px">✅ Ou avec <span style="color:var(--green);font-weight:700">✅ ✓</span> ou <code style="color:var(--green)">(correct)</code></p>
+          <p>✅ Plusieurs * = multi-réponses, Vrai/Faux auto-détecté</p>
         </div>
       </div>
 
       <div class="card mb-12" style="padding:14px">
-        <p style="font-size:12px;color:var(--muted);margin-bottom:6px">💡 Prompt à donner à une IA :</p>
-        <div style="background:var(--subtle);border-radius:8px;padding:10px;font-size:12px;color:#94a3b8;line-height:1.6;font-family:'JetBrains Mono',monospace">
+        <p style="font-size:12px;color:var(--muted);margin-bottom:6px">💡 Prompt à copier-coller dans Claude ou ChatGPT :</p>
+        <div style="background:var(--subtle);border-radius:10px;padding:12px;font-size:12px;color:#94a3b8;line-height:1.6;font-family:'JetBrains Mono',monospace;border:1px solid var(--border)">
           Génère 20 questions de quiz sur [TON SUJET].<br>
-          Format : une question par bloc, réponses en dessous,<br>
-          * devant les bonnes réponses.<br>
-          Ligne vide entre chaque question.<br>
-          Mélange vrai/faux et QCM.
+          Utilise exactement ce format :<br><br>
+          1. Texte de la question ?<br>
+          a) *Bonne réponse<br>
+          b) Mauvaise réponse<br>
+          c) Mauvaise réponse<br>
+          d) Mauvaise réponse<br><br>
+          Règles :<br>
+          - Numérote les questions (1. 2. 3.)<br>
+          - Réponses avec a) b) c) d)<br>
+          - Mets * juste après la lettre devant chaque bonne réponse<br>
+          - Pour les multi-réponses, mets * devant chaque bonne<br>
+          - Mélange vrai/faux et QCM<br>
+          - Pas de gras, pas de **, pas d'explication<br>
+          - Ligne vide entre chaque question
         </div>
       </div>
 
@@ -1035,18 +1563,21 @@ Pplateau
     root.className="app";
     root.innerHTML=`<div class="fade-in center" style="width:100%;max-width:340px">
       <h1 class="title mb-4">QUIZ <span>BATTLE</span></h1>
-      <p style="color:var(--muted);font-size:.95rem;margin-bottom:32px">Rejoins la partie !</p>
+      <p style="color:var(--muted);font-size:.95rem;margin-bottom:28px">Rejoins la partie !</p>
       <div class="card gap-10">
         <input id="inp-name" placeholder="Ton pseudo" value="${esc(S.playerName)}">
         <input id="inp-code" class="code-input" placeholder="CODE" maxlength="6" value="${esc(S.joinCode)}">
         <button class="btn btn-teal" id="btn-join">🚀 Rejoindre</button>
         ${S.error?`<p class="err">${esc(S.error)}</p>`:""}
       </div>
+      <div style="width:100%;height:1px;background:var(--border);margin:24px 0"></div>
+      <button class="btn btn-outline" id="btn-solo">🎯 S'entraîner seul</button>
     </div>`;
     document.getElementById("inp-name").oninput=e=>S.playerName=e.target.value;
     document.getElementById("inp-code").oninput=e=>S.joinCode=e.target.value.toUpperCase();
     document.getElementById("inp-code").onkeydown=e=>{if(e.key==="Enter")doJoin();};
     document.getElementById("btn-join").onclick=doJoin;
+    document.getElementById("btn-solo").onclick=loadSoloBanks;
     return;
   }
 
@@ -1135,7 +1666,7 @@ Pplateau
     root.className="app";
     const w=S.players[0];const me=S.players.find(p=>p.name===S.playerName);
     const mr=S.players.findIndex(p=>p.name===S.playerName)+1;
-    const medal=mr===1?"🥇":mr===2?"🥈":mr===3?"🥉":`#${mr}`;
+    const medal=mr<=0?"":mr===1?"🥇":mr===2?"🥈":mr===3?"🥉":`#${mr}`;
     root.innerHTML=`<div class="fade-in center">
       <div class="trophy">🏆</div>
       <h1 class="winner-name mt-8">${esc(w?.name||"—")}</h1>
@@ -1243,6 +1774,186 @@ Pplateau
     return;
   }
 
+  // ============ SOLO MODE SCREENS ============
+
+  // SOLO PICK (choose a quiz)
+  if(S.screen==="solo-pick"){
+    root.className="scroll-page";
+    const cats = getCategories();
+    const filter = S.categoryFilter || "all";
+    const filtered = filter==="all" ? S.banks : S.banks.filter(b=>b.category===filter);
+    const grouped = {};
+    filtered.forEach(b=>{ const c=b.category||"📚 Autre"; if(!grouped[c])grouped[c]=[]; grouped[c].push(b); });
+
+    const tabsHTML = `<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:16px;scrollbar-width:none">
+      <button class="cat-tab ${filter==="all"?"active":""}" data-cat="all">Tout</button>
+      ${cats.map(c=>{const n=S.banks.filter(b=>b.category===c).length;return n?`<button class="cat-tab ${filter===c?"active":""}" data-cat="${esc(c)}">${esc(c)}</button>`:""}).join("")}
+    </div>`;
+
+    let listHTML = "";
+    for(const [cat, bks] of Object.entries(grouped).sort((a,b)=>a[0].localeCompare(b[0]))){
+      listHTML += `<p style="color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px 4px">${esc(cat)}</p>`;
+      bks.forEach(b=>{
+        const n = b.questions?.length||0;
+        if(n===0) return;
+        listHTML += `<div class="bank-item card-hover" data-solo="${b.id}" style="cursor:pointer">
+          <div><div class="bank-name">${esc(b.name)}</div><div class="bank-count">${n} question${n!==1?"s":""}</div></div>
+          <span style="color:var(--teal);font-size:1.2rem">▶</span>
+        </div>`;
+      });
+    }
+    if(!filtered.length) listHTML = '<div class="center" style="padding:40px"><p style="color:var(--muted)">Aucun quiz disponible</p></div>';
+
+    root.innerHTML=`
+      <div class="sticky-head">
+        <div class="row mb-8">
+          <button class="btn-ghost" id="btn-solo-back">← Retour</button>
+          <h2 class="title" style="font-size:1.3rem">🎯 <span>Entraînement</span></h2>
+          <div></div>
+        </div>
+        ${tabsHTML}
+      </div>
+      <p style="color:var(--muted);font-size:13px;text-align:center;margin-bottom:16px">Choisis un quiz pour t'entraîner</p>
+      ${listHTML}
+    `;
+    document.getElementById("btn-solo-back").onclick=doReset;
+    root.querySelectorAll(".cat-tab").forEach(el=>el.onclick=()=>setState({categoryFilter:el.dataset.cat}));
+    root.querySelectorAll("[data-solo]").forEach(el=>el.onclick=()=>startSolo(el.dataset.solo));
+    return;
+  }
+
+  // SOLO QUESTION
+  if(S.screen==="solo-q"&&S.solo){
+    root.className="app";
+    const q=S.solo.questions[S.solo.currentQ];
+    const isM=q.type==="multi";
+    root.innerHTML=`<div class="fade-in center w100" style="max-width:540px">
+      <div class="row mb-8" style="max-width:520px;margin:0 auto">
+        <span class="mono" style="color:var(--muted);font-size:13px">${S.solo.currentQ+1}/${S.solo.questions.length}</span>
+        ${isM?'<span class="badge badge-amber">MULTI</span>':""}
+        <span class="mono" style="color:var(--amber);font-size:13px">${S.solo.score} pts</span>
+      </div>
+      ${soloTimerHTML()}
+      <div class="card center mb-16 mt-12" style="padding:18px 16px;max-width:520px">
+        <h2 style="font-size:1.15rem;line-height:1.5;font-weight:700">${esc(q.q)}</h2>
+      </div>
+      <div class="answers cols-2" style="max-width:520px;margin:0 auto">
+        ${q.options.map((opt,i)=>{
+          const base=q.options.length<=2?`vf${i}`:COLORS[i%COLORS.length];
+          return `<button class="ans-btn ${base}" data-ans="${i}"><span class="shape">${SHAPES[i]||"◆"}</span> ${esc(opt)}</button>`;
+        }).join("")}
+      </div>
+      ${isM?`<button class="btn btn-purple mt-16" id="btn-solo-val" disabled style="max-width:340px">Valider (0)</button>`:""}
+      <button class="btn-ghost mt-12" id="btn-solo-quit">Quitter</button>
+    </div>`;
+    root.querySelectorAll("[data-ans]").forEach(el=>el.onclick=()=>soloToggle(+el.dataset.ans));
+    const sv=document.getElementById("btn-solo-val");
+    if(sv) sv.onclick=()=>soloSubmit(S.soloSel);
+    document.getElementById("btn-solo-quit").onclick=()=>{stopSoloTimer();doReset();};
+    return;
+  }
+
+  // SOLO RESULT (after each question)
+  if(S.screen==="solo-result"&&S.solo){
+    root.className="app";
+    const res = S.solo.results[S.solo.results.length-1];
+    const q = S.solo.questions[S.solo.currentQ];
+    const emoji = res.status==="correct"?"🎉":res.status==="partial"?"🤏":"😬";
+    const msg = res.status==="correct"?"Bravo !":res.status==="partial"?"Presque !":"Raté !";
+    const clr = res.status==="correct"?"var(--green)":res.status==="partial"?"var(--amber)":"var(--red)";
+    
+    const optsHTML = q.options.map((opt,i)=>{
+      const isCorrect = q.answers.includes(i);
+      const wasChosen = res.choices.includes(i);
+      let bg, border;
+      if(isCorrect && wasChosen){ bg="rgba(74,222,128,.15)"; border="var(--green)"; }
+      else if(isCorrect){ bg="rgba(74,222,128,.08)"; border="var(--green)"; }
+      else if(wasChosen){ bg="rgba(248,113,113,.1)"; border="var(--red)"; }
+      else { bg="var(--card)"; border="var(--border)"; }
+      const icon = isCorrect?"✓":(wasChosen?"✗":"");
+      const iconClr = isCorrect?"var(--green)":"var(--red)";
+      return `<div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:12px;background:${bg};border:1px solid ${border};margin-bottom:6px">
+        <span style="color:${iconClr};font-weight:800;font-size:14px;width:20px">${icon}</span>
+        <span style="font-size:14px;font-weight:${isCorrect?700:500};color:${isCorrect?"var(--green)":"var(--text)"}">${esc(opt)}</span>
+      </div>`;
+    }).join("");
+
+    root.innerHTML=`<div class="fade-in center" style="max-width:480px;width:100%">
+      <div style="font-size:2.5rem;margin-bottom:6px">${emoji}</div>
+      <h2 class="title" style="font-size:1.4rem;color:${clr}">${msg}</h2>
+      <p style="color:var(--amber);font-weight:700;margin:4px 0 20px">+${res.points} pts — Total : ${S.solo.score}</p>
+      <div class="card" style="padding:16px;margin-bottom:16px;text-align:left">
+        <p style="font-weight:700;font-size:14px;margin-bottom:12px;color:var(--muted)">${esc(q.q)}</p>
+        ${optsHTML}
+      </div>
+      <button class="btn btn-purple" id="btn-solo-next" style="max-width:340px">
+        ${S.solo.currentQ+1>=S.solo.questions.length?"🏆 Résultats finaux":"➡️ Question suivante"}
+      </button>
+    </div>`;
+    document.getElementById("btn-solo-next").onclick=soloNext;
+    return;
+  }
+
+  // SOLO FINAL
+  if(S.screen==="solo-final"&&S.solo){
+    root.className="scroll-page";
+    const total = S.solo.questions.length;
+    const correct = S.solo.results.filter(r=>r.status==="correct").length;
+    const partial = S.solo.results.filter(r=>r.status==="partial").length;
+    const pct = Math.round((correct/total)*100);
+    const grade = pct>=90?"🌟 Excellent !":pct>=70?"💪 Bien joué !":pct>=50?"📖 À revoir":pct>=30?"😬 Insuffisant":"🔴 À travailler !";
+
+    const questionsHTML = S.solo.results.map((r,i)=>{
+      const barC = r.status==="correct"?"var(--green)":r.status==="partial"?"var(--amber)":"var(--red)";
+      const icon = r.status==="correct"?"✓":r.status==="partial"?"~":"✗";
+      return `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;background:var(--card);border:1px solid var(--border);margin-bottom:6px">
+        <span style="color:${barC};font-weight:800;font-size:16px;width:24px">${icon}</span>
+        <span style="flex:1;font-size:13px;font-weight:600">${esc(r.q).substring(0,60)}${r.q.length>60?"...":""}</span>
+        <span class="mono" style="color:var(--amber);font-size:12px">+${r.points}</span>
+      </div>`;
+    }).join("");
+
+    const mistakes = S.solo.results.filter(r=>r.status!=="correct").length;
+
+    root.innerHTML=`
+      <div class="fade-in center" style="margin-bottom:20px">
+        <div style="font-size:3rem;margin-bottom:8px">🏆</div>
+        <h2 class="title" style="font-size:1.6rem">${esc(S.solo.bankName)}</h2>
+        <p style="color:var(--muted);margin-top:4px">${grade}</p>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:20px;justify-content:center;flex-wrap:wrap">
+        <div class="card center" style="flex:1;min-width:90px;padding:14px">
+          <div class="mono" style="font-size:1.6rem;font-weight:900;color:${pct>=60?"var(--green)":"var(--amber)"}">${pct}%</div>
+          <div style="font-size:11px;color:var(--muted)">Réussite</div>
+        </div>
+        <div class="card center" style="flex:1;min-width:90px;padding:14px">
+          <div class="mono" style="font-size:1.6rem;font-weight:900;color:var(--green)">${correct}</div>
+          <div style="font-size:11px;color:var(--muted)">Correct</div>
+        </div>
+        <div class="card center" style="flex:1;min-width:90px;padding:14px">
+          <div class="mono" style="font-size:1.6rem;font-weight:900;color:var(--amber)">${S.solo.score}</div>
+          <div style="font-size:11px;color:var(--muted)">Points</div>
+        </div>
+      </div>
+      ${mistakes>0?`<button class="btn btn-red mb-16" id="btn-solo-redo" style="max-width:400px;margin:0 auto 16px">🔄 Refaire les ${mistakes} erreur${mistakes>1?"s":""}</button>`:""}
+      <h3 style="font-size:14px;color:var(--muted);margin-bottom:10px">Détail des questions</h3>
+      ${questionsHTML}
+      <div style="display:flex;gap:10px;margin-top:20px;padding-bottom:30px">
+        <button class="btn btn-amber" id="btn-solo-retry" style="flex:1">🔄 Tout refaire</button>
+        <button class="btn btn-outline" id="btn-solo-other" style="flex:1">📚 Autre quiz</button>
+        <button class="btn btn-purple" id="btn-solo-home" style="flex:1">🏠 Accueil</button>
+      </div>
+    `;
+    const redoBtn = document.getElementById("btn-solo-redo");
+    if(redoBtn) redoBtn.onclick = soloRedoMistakes;
+    document.getElementById("btn-solo-retry").onclick=()=>{
+      if(S.solo.bankId) startSolo(S.solo.bankId); else loadSoloBanks();
+    };
+    document.getElementById("btn-solo-other").onclick=loadSoloBanks;
+    document.getElementById("btn-solo-home").onclick=doReset;
+    return;
+  }
+
   // PLAYER LOBBY
   if(S.screen==="play-lobby"){
     root.className="app";
@@ -1291,19 +2002,26 @@ Pplateau
     const emoji=me?.lastCorrect?"🎉":me?.lastPartial?"🤏":"😬";
     const msg=me?.lastCorrect?"Bravo !":me?.lastPartial?"Presque !":"Raté !";
     const clr=me?.lastCorrect?"var(--green)":me?.lastPartial?"var(--amber)":"var(--red)";
-    const medal=rank===1?"🥇":rank===2?"🥈":rank===3?"🥉":`#${rank}`;
-    root.innerHTML=`<div class="fade-in center">
+    const medal=rank<=0?"":rank===1?"🥇":rank===2?"🥈":rank===3?"🥉":`#${rank}`;
+    // Show correct answer(s)
+    const q=S.gs?.questions?.[S.gs.currentQ];
+    const correctHTML=q?q.answers.map(ai=>`<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:10px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);font-weight:700;font-size:13px;color:var(--green)">${SHAPES[ai]||"◆"} ${esc(q.options[ai])}</span>`).join(" "):"";
+    root.innerHTML=`<div class="fade-in center" style="max-width:440px;width:100%">
       <div style="font-size:3rem;margin-bottom:8px">${emoji}</div>
       <h2 class="title" style="font-size:1.4rem;color:${clr}">${msg}</h2>
-      <p style="color:#c084fc;font-size:1.1rem;margin:8px 0;font-weight:700">${medal} — ${me?.score||0} pts</p>
-      <p style="color:var(--muted);font-size:13px;margin-top:20px">Question suivante...</p>
+      <p style="color:#c084fc;font-size:1.1rem;margin:8px 0 16px;font-weight:700">${medal}${medal?" — ":""}${me?.score||0} pts</p>
+      ${correctHTML?`<div class="card" style="padding:14px;margin-bottom:12px">
+        <p style="color:var(--muted);font-size:11px;font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">${q.answers.length>1?"Bonnes réponses":"Bonne réponse"}</p>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center">${correctHTML}</div>
+      </div>`:""}
+      <p style="color:var(--muted);font-size:13px;margin-top:8px">Question suivante...</p>
     </div>`;
     return;
   }
 }
 
 // ============ BOOT ============
-function isAdmin(){ return window.location.search.includes("admin"); }
+function isAdmin(){ return window.location.search.toLowerCase().includes("admin"); }
 function getBaseURL(){ return window.location.origin + window.location.pathname; }
 function getQRUrl(code){
   const joinUrl = getBaseURL() + "#" + code;
