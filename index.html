@@ -933,14 +933,23 @@ function parseImportText(text){
   
   function isMetaLine(line){
     const t = line.trim().replace(/^\*{1,2}/, "").trim();
-    if(/^(explication|note|réponse|answer|explanation|correct|source|astuce|rappel|nb|remarque)\s*[:—\-]/i.test(t)) return true;
     if(/^(réponse|answer)\s*(correcte|correct)?\s*[:—\-]/i.test(t)) return true;
+    if(/^(note|correct|source|rappel|nb|remarque)\s*[:—\-]/i.test(t)) return true;
     return false;
   }
+  function isExplLine(line){
+    const t = line.trim().replace(/^\*{1,2}/, "").trim();
+    if(/^(explication|explanation|justification|astuce)\s*[:—\-]/i.test(t)) return true;
+    return false;
+  }
+  function cleanExpl(line){
+    return line.trim().replace(/^\*{1,2}\s*/, "").replace(/^(explication|explanation|justification|astuce)\s*[:—\-]\s*/i, "").replace(/\*{1,2}\s*$/, "").trim();
+  }
   
-  // Step 2: Split into blocks (each block = 1 question + its answers)
+  // Step 2: Split into blocks (each block = 1 question + its answers + optional explanation)
   const blocks = [];
   let currentBlock = [];
+  let currentExpl = "";
   let lastLineWasBlank = true;
   
   for(let i = 0; i < lines.length; i++){
@@ -953,54 +962,54 @@ function parseImportText(text){
       continue;
     }
     
-    // Skip meta-lines (explanations, notes, etc.) at any position
+    // Skip non-explanation meta-lines
     if(isMetaLine(trimmed)){
+      lastLineWasBlank = false;
+      continue;
+    }
+    
+    // Capture explanation lines
+    if(isExplLine(trimmed)){
+      currentExpl = cleanExpl(trimmed);
       lastLineWasBlank = false;
       continue;
     }
     
     // Check if this line starts a new question
     if(isQuestionStart(line, lastLineWasBlank ? "" : undefined)){
-      // If we have a current block with at least a question + answers, save it
       if(currentBlock.length >= 2){
-        blocks.push([...currentBlock]);
-      } else if(currentBlock.length === 1 && blocks.length > 0){
-        // Single line that was thought to be a question but has no answers
-        // Might be continuation of previous question — skip or append
+        blocks.push({lines:[...currentBlock], expl:currentExpl});
       }
       currentBlock = [trimmed];
+      currentExpl = "";
     } else if(isAnswerLine(line) && currentBlock.length >= 1){
       currentBlock.push(trimmed);
     } else if(currentBlock.length >= 1 && !lastLineWasBlank){
-      // Continuation of the current question text (multi-line question)
       if(currentBlock.length === 1){
-        // Append to question text
         currentBlock[0] += " " + trimmed;
       } else {
-        // Probably a new answer or continuation
         currentBlock.push(trimmed);
       }
     } else if(lastLineWasBlank && trimmed){
-      // After blank line — new question
       if(currentBlock.length >= 2){
-        blocks.push([...currentBlock]);
+        blocks.push({lines:[...currentBlock], expl:currentExpl});
       }
       currentBlock = [trimmed];
+      currentExpl = "";
     } else {
       currentBlock.push(trimmed);
     }
     
     lastLineWasBlank = false;
   }
-  // Don't forget the last block
   if(currentBlock.length >= 2){
-    blocks.push(currentBlock);
+    blocks.push({lines:currentBlock, expl:currentExpl});
   }
   
   // Step 3: Parse each block into a question object
   const questions = [];
   for(const block of blocks){
-    let qText = block[0];
+    let qText = block.lines[0];
     // Strip markdown formatting first
     qText = qText.replace(/^\*{1,2}\s*/, "").replace(/\*{1,2}\s*$/, ""); // **bold**
     qText = qText.replace(/^_{1,2}\s*/, "").replace(/_{1,2}\s*$/, ""); // __bold__
@@ -1025,8 +1034,8 @@ function parseImportText(text){
     const options = [];
     const answers = [];
     
-    for(let i = 1; i < block.length; i++){
-      let line = block[i];
+    for(let i = 1; i < block.lines.length; i++){
+      let line = block.lines[i];
       let isCorrect = false;
       
       // Skip meta-lines inside blocks too
@@ -1086,7 +1095,7 @@ function parseImportText(text){
     else if(answers.length > 1) type = "multi";
     
     if(answers.length === 0) answers.push(0);
-    questions.push({ q: qText, type, options, answers });
+    questions.push({ q: qText, type, options, answers, expl: block.expl || "" });
   }
   return questions;
 }
@@ -1378,6 +1387,7 @@ function render(){
         <input value="${esc(q.q)}" placeholder="Ta question..." data-qinput="${qi}" style="font-weight:600;margin-bottom:8px">
         ${optsHTML}
         ${q.type!=="vf"&&q.options.length<6?`<button class="btn-ghost" data-addopt="${qi}" style="font-size:12px;margin-top:2px">+ option</button>`:""}
+        <textarea data-expl="${qi}" placeholder="💡 Justification (visible admin uniquement)" style="font-size:12px;color:var(--muted);min-height:36px;margin-top:8px;padding:10px 12px;border:1px dashed var(--border);background:transparent;resize:vertical">${esc(q.expl||"")}</textarea>
       </div>`;
     }).join("");
 
@@ -1448,6 +1458,7 @@ function render(){
     root.querySelectorAll(".opt-check").forEach(el=>el.onclick=()=>eQ(+el.dataset.qi,"tog",el.dataset.oi));
     root.querySelectorAll("[data-optqi]").forEach(el=>el.oninput=e=>eQ(+e.target.dataset.optqi,"opt"+e.target.dataset.optoi,e.target.value));
     root.querySelectorAll("[data-addopt]").forEach(el=>el.onclick=()=>{const qi=+el.dataset.addopt;if(S.editQ[qi].options.length<6){S.editQ[qi].options.push("");render();}});
+    root.querySelectorAll("[data-expl]").forEach(el=>el.oninput=e=>{S.editQ[+e.target.dataset.expl].expl=e.target.value;});
     root.querySelectorAll("[data-delopt]").forEach(el=>{const[qi,oi]=el.dataset.delopt.split("-").map(Number);el.onclick=()=>{if(S.editQ[qi].options.length>2){S.editQ[qi].options.splice(oi,1);S.editQ[qi].answers=S.editQ[qi].answers.filter(a=>a!==oi).map(a=>a>oi?a-1:a);render();}}});
     return;
   }
@@ -1645,9 +1656,14 @@ d) *Saturation O2`;
     root.className="app";
     const q=S.gs.questions[S.gs.currentQ];
     const cHTML=q.answers.map(ai=>`<span class="badge-correct">${SHAPES[ai]||"◆"} ${esc(q.options[ai])}</span>`).join(" ");
+    const explHTML=q.expl?`<div class="card" style="padding:14px;max-width:440px;margin:0 auto 20px;text-align:left;border-color:rgba(139,108,255,.15)">
+      <p style="color:var(--purple);font-size:11px;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">💡 Justification</p>
+      <p style="color:var(--text);font-size:13px;line-height:1.6">${esc(q.expl)}</p>
+    </div>`:"";
     root.innerHTML=`<div class="fade-in center">
       <p style="color:var(--green);font-weight:700;font-size:13px;margin-bottom:10px">${q.answers.length>1?"BONNES RÉPONSES":"BONNE RÉPONSE"}</p>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:24px">${cHTML}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:16px">${cHTML}</div>
+      ${explHTML}
       <div class="board">${boardHTML()}</div>
       <button class="btn btn-purple mt-20" id="btn-next" style="max-width:340px">${S.gs.currentQ+1>=S.gs.totalQ?"🏆 Résultats finaux":"➡️ Suivante"}</button>
       <div style="display:flex;gap:8px;margin-top:12px;max-width:340px;width:100%;justify-content:center">
