@@ -332,7 +332,7 @@ async function createBank(category){
     name:"Nouveau quiz",
     category: cat === "all" ? "📚 Autre" : cat,
     createdAt:Date.now(),
-    questions: SAMPLE_QUESTIONS
+    questions: [{q:"",type:"vf",options:["Vrai","Faux"],answers:[0]}]
   });
   await loadBanks();
   openBankEditor(id);
